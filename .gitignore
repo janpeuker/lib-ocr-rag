@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.bak
+.*
+!.gitignore
+eval_out/
+experiments/
+rag_probes.json
+nohup.out
+
+# Keep test/, in/ and out/ in the repo as (visibly) empty folders via a tracked
+# .gitkeep, but never publish their contents: private eval fixtures, input photos,
+# and generated OCR output all stay local. (The .gitkeep negations come last so they
+# win over the broad `.*` dotfile ignore above.)
+test/*
+in/*
+out/*
+!test/.gitkeep
+!in/.gitkeep
+!out/.gitkeep

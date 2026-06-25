@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "library-search": {
+      "command": "/ABSOLUTE/PATH/TO/lib-ocr-rag/.venv/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/lib-ocr-rag/rag.py", "serve"],
+      "env": { "HF_HUB_OFFLINE": "1" }
+    }
+  }
+}

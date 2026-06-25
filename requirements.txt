@@ -1,0 +1,9 @@
+# Local OCR tool — offline at inference time after the first model download.
+# mlx-vlm is the engine; it pulls in mlx, transformers, pillow, numpy.
+mlx-vlm==0.6.3
+
+# Required by the dots/Qwen-family HuggingFace *processor* (transformers 5.x
+# eagerly instantiates a Qwen2-VL video processor that needs these). The model
+# itself runs on MLX/Metal — these are Apple-Silicon CPU/MPS wheels, NO CUDA.
+torch>=2.12
+torchvision>=0.27

@@ -1,0 +1,16 @@
+# Local RAG tool (rag.py) — offline at query time after the first model download.
+# Separate from requirements.txt so the OCR tool stays minimal. See
+# IMPLEMENTATION_PLAN.md §12.8.
+
+# Dense embeddings on Apple-Silicon MPS. Pulls transformers/torch (already present
+# for the OCR processor) + the sentence-transformers wrapper. The default model
+# BAAI/bge-small-en-v1.5 (~130 MB) downloads once, then HF_HUB_OFFLINE=1 applies.
+sentence-transformers>=3.0
+
+# MCP server (optional `rag.py serve`; the CLI/Skill path needs none of this).
+mcp>=1.0
+
+# Optional vector backends — only needed if you select them via --backend.
+# Lazy-imported, so the default (numpy) install needs neither.
+# faiss-cpu>=1.8
+# duckdb>=1.0
