@@ -42,6 +42,16 @@ and drops handwritten annotations.
   can't derive it — a title buried in a title-page *list* (a series page) or lost to a
   runaway read, AND not recoverable from the RIS. Last resort; prefer fixing the read or
   the bibliography first. Cover-title resolution + this hint are in `IMPLEMENTATION_PLAN.md §15`.
+- **Cover titles come from the largest font, not reading order** (`§16`). A COVER shot
+  gets one extra `dots.mocr` layout+text pass (`COVER_TITLE_PROMPT`); `_pick_cover_title`
+  takes the tallest `Title` bbox so a book isn't named after the publisher/author that
+  happens to OCR first. The result is cached as `cover_title` and **backfilled** into
+  pre-§16 caches on the next `batch` (one layout pass per cover, resumable;
+  `--no-cover-backfill` keeps the fast emit-only path). No `Title` box (a stylized title
+  the model folds into the cover image) ⇒ `cover_title` is `""` and the old reading-order
+  text heuristic (`_cover_title`) still runs — so don't "fix" the empty case by grabbing
+  the next-largest text box (that just resurfaces the author). Tune the selection against
+  `batch` cover output, never by editing a second model path.
 - `IMG_3020` is the diagnostic page: a high score there means handwriting is being
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies

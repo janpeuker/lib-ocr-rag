@@ -933,6 +933,87 @@ pages mis-filed under Unruly Waters were added there).
 
 ---
 
+## 16. Cover titles by largest font (layout dual-pass, run 2026-06-26)
+
+Triggered by a second `report.md` review: covers were still named after the **publisher**
+or **author** rather than the book. Root cause: `_cover_title` (§15) takes the *first* run
+of title-like lines in dots.mocr's **reading order**, but on a cover that order is arbitrary
+w.r.t. type size — the publisher/author imprint OCRs first as often as not. Confirmed across
+the batch:
+
+| Book | Shot | OCR'd as | Cover's largest type (true title) |
+|------|------|----------|-----------------------------------|
+| 27 | IMG_3036 | The Guilford Press, New York London | Rethinking the Power of Maps |
+| 32 | IMG_4358 | Geoffrey Benjamin | Tribal Communities in the Malay World |
+| 38 | IMG_4798 | British Library | Secret Maps |
+| 43 | IMG_5026 | Geoffrey Benjamin & Cynthia Chou | Tribal Communities in the Malay World |
+| 59 | IMG_5922 | Bloomsbury | Singapore: A Modern History |
+
+**Fix — a book title is the biggest type on the cover, not the first line.** `dots.mocr`
+exposes type size through its layout pass: `COVER_TITLE_PROMPT` (in `prompts.py`) asks for
+layout **with text** (unlike `LAYOUT_PROMPT`, which suppresses text for figure detection)
+and `_pick_cover_title` takes the tallest `Title` bbox (height = font-size proxy), joining
+boxes within `_COVER_TITLE_FONT_RATIO` (0.55) of the tallest so a wrapped title is captured
+whole ("Tribal Communities" / "in the Malay World") and de-duping the front-cover/spine
+repeat ("Secret Maps" × 2). No `Title` label ⇒ fall back to the single tallest title-like
+text box; nothing usable ⇒ "" and the §15 reading-order heuristic still runs (no regression).
+This is one extra layout pass **per COVER shot only** (~150 in the batch), and the layout
+text never enters the transcription body.
+
+- **Plumbing.** `process_image` computes `cover_title` for COVER shots and stores it on the
+  record; `parse_metadata(typ, text, cover_title)`, `book_title`, and `page_header` all
+  prefer it over the text heuristic. `_parse_layout` now carries the `text` field (harmless
+  to the figure path, which reads only `category`).
+- **No `PROMPT_VERSION` bump.** This is additive and cover-only; bumping the version would
+  invalidate all 2200+ body caches for nothing. Instead `cmd_batch` **backfills**: a cached
+  COVER lacking `cover_title` gets one layout pass via `backfill_cover_title` and is re-saved
+  (resumable — the field, even when "", is the checkpoint; `--no-cover-backfill` keeps the
+  fast emit-only path). Body OCR/caches are untouched.
+
+**Spine-stamp leak (book 30, "GENERAL REF").** Separate bug, same review. The only
+spine/shelf key-image book (IMG_4310, three spines) was named from a **runaway-truncated
+library stamp**: "GENERAL REFERENCE LIBRARY" was cut to "GENERAL REF", which slipped past
+`_SPINE_STOP` (the "reference" stem was gone) and isn't a `User Group:` block. `_spine_titles`
+now **requires the `User Group:` anchor** (real spine titles always follow it; the slip
+fragment has none) and `_SPINE_STOP` also catches `general ref` / `state librar`. With the
+stamp gone, exclusion finds no new title (both real spines belong to named siblings) — and
+the book's body (Straits of Melaka / Cham / Sailendra trade) is plainly Andaya's *Leaves of
+the Same Tree*, the same book as the later cover sitting (IMG_4893), so it's rejoined via
+`in/merges.txt` (`IMG_4310 + IMG_4893`) — the §14 title-invisible-duplicate path.
+
+**Refinements found running the 153-cover backfill (subtitle, speed, byline veto, folio):**
+- **Subtitle by geometry, not reading order.** `_pick_cover_title` joins same-font `Title`
+  boxes, then absorbs a *hugging* subtitle: the next box(es) whose top sits within
+  `_COVER_SUBTITLE_GAP_RATIO` of their own height below the title (a tight gap = same title
+  block; the author/imprint is set farther down, so the gap stops there). `_looks_like_byline`
+  also stops the scan from eating an author set close under the title (e.g. "Denis Wood").
+  This recovers "Singapore: Wealth, Power and the Culture of Control" from a `Title`
+  "Singapore" + a smaller subtitle box.
+- **Adaptive decode budget.** The layout pass needs the full MAX_EDGE image but rarely a full
+  4096-token transcription; capping at `COVER_LAYOUT_MAX_TOKENS` (1536) keeps a sparse cover
+  fast. A chatty/back-cover shot overruns the cap and the *truncated* JSON scrambles the boxes
+  (a garbled title with a half-token tail, e.g. "… Tribal Communities no en"), so on
+  `finish_reason=="length"` we redo at the full budget. ~50s/cover at 1600px; a 1024px pass
+  is faster but silently misses small-on-cover titles, so resolution is not negotiable.
+- **A byline running header must not veto a real cover title.** §15's `COVER_OVERRIDE_VOTES`
+  rule (a repeated running title beats a stray "cover") wrongly fired when the verso header was
+  the *editors'* names ("Geoffrey Benjamin"): `book_title` now skips that veto when
+  `_looks_like_byline(top)`.
+
+**Model non-determinism (escape-hatch cases).** dots.mocr's layout pass is not fully
+deterministic on MPS: a few covers alternately emit/withhold the subtitle box or scramble a
+busy back-cover, so the heuristic can't pin them. Resolved with the existing hints —
+`IMG_4358 + IMG_5026` (the two *Tribal Communities* sittings fold together, so the clean cover
+wins) in `in/merges.txt`, and `IMG_5922 = Singapore: A Modern History` in `in/titles.txt`.
+
+**Known limitation.** The font heuristic only fires on shots classified COVER; a title page
+mis-classified as a body PAGE still falls to running-header voting. Covers whose model emits
+no `Title` box at all (spine-only/sideways/imprint shots — `cover_title == ""`) keep the §15
+text-heuristic behaviour, so a residual class of such books (e.g. ones named after a lone
+author surname or an imprint line) is unchanged by §16 and still needs `in/titles.txt`.
+
+---
+
 ## Appendix — Historic reference (original single-page design)
 
 Condensed from the first plan; kept for rationale, not as current instructions.

@@ -27,7 +27,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, ExifTags
 
-from prompts import PROMPT, PROMPT_VERSION, LAYOUT_PROMPT
+from prompts import PROMPT, PROMPT_VERSION, LAYOUT_PROMPT, COVER_TITLE_PROMPT
 
 DEFAULT_MODEL = "mlx-community/dots.mocr-4bit"
 MAX_TOKENS = 4096
@@ -421,10 +421,12 @@ def detect_type(text: str) -> str:
     return "PAGE"
 
 
-def parse_metadata(typ: str, text: str) -> str:
+def parse_metadata(typ: str, text: str, cover_title: str = "") -> str:
     """Pull bibliographic fields out of a cover/imprint shot's OCR text into a
-    small single-doc YAML block. No second model call — dots.mocr would just
-    re-transcribe, so we parse the text we already have."""
+    small single-doc YAML block. No second transcription call — dots.mocr would
+    just re-transcribe, so we parse the text we already have. `cover_title` (the
+    largest-font Title from the layout pass, §16) overrides the reading-order text
+    heuristic when available."""
     fields = {}
     m = ISBN_RE.search(text)
     if m:
@@ -436,7 +438,7 @@ def parse_metadata(typ: str, text: str) -> str:
     if m:
         fields["publisher"] = m.group(1).strip()
     if typ == "COVER":  # the title printed on a cover/spine (may wrap across lines)
-        t = _cover_title(text)
+        t = cover_title or _cover_title(text)
         if t:
             fields["title"] = t
     order = ("title", "author", "publisher", "year", "isbn", "call_number")
@@ -580,7 +582,8 @@ def _parse_layout(text: str):
         return None
     if not isinstance(data, list):
         return None
-    return [{"category": el.get("category"), "bbox": el.get("bbox")}
+    return [{"category": el.get("category"), "bbox": el.get("bbox"),
+             "text": el.get("text")}
             for el in data if isinstance(el, dict) and el.get("category")]
 
 
@@ -595,6 +598,143 @@ def layout_figures(model, processor, config, img_path) -> int:
                    temperature=0.0, max_tokens=MAX_TOKENS, verbose=False)
     boxes = _parse_layout(res.text) or []
     return sum(b["category"] in _FIG_CATS for b in boxes)
+
+
+# --- cover title by largest font (layout dual-pass) ------------------------ #
+# A cover's book title is the largest type on the page, but PROMPT transcribes in
+# reading order, so the *first* title-like line is as often the publisher/author.
+# COVER_TITLE_PROMPT returns layout WITH text; we take the tallest `Title` bbox
+# (font-size proxy = box height) as the title — IMPLEMENTATION_PLAN §16. The model
+# only labels the genuine title `Title`, so we trust ONLY that category: when none
+# is returned (a stylized title the model folds into the cover `Picture`, e.g.
+# "Bahasa Mah Meri"), we return "" and let the reading-order text heuristic run —
+# picking the next-largest *text* box would just resurface the author/publisher.
+_COVER_TITLE_FONT_RATIO = 0.55   # join Title boxes within this fraction of the tallest
+                                 # (a wrapped title: "Tribal Communities" / "in the Malay World")
+_COVER_SUBTITLE_GAP_RATIO = 0.8  # a subtitle hugs the title: the gap above it is under this
+                                 # fraction of its own line height; the author/imprint sits farther
+_COVER_SUBTITLE_MAXLINES = 2     # at most this many boxes absorbed as a subtitle
+_COVER_TITLE_MAXLEN = 90
+_COVER_SUBTITLE_CATS = ("Title", "Section-header", "Text", "List-item")
+# lowercase function words mark a phrase (subtitle); a byline/author line has none.
+_BYLINE_FUNC = {"and", "of", "the", "in", "on", "for", "to", "with", "from", "at",
+                "by", "as", "how", "why", "what", "a", "an", "&"}
+
+
+def _looks_like_byline(s: str) -> bool:
+    """True if `s` reads like an author/editor line (a run of capitalized names and
+    initials) rather than a title/subtitle. Used to stop a subtitle scan from eating
+    an author set close under the title (e.g. "Denis Wood" under a big cover title).
+    A leading article or any lowercase function word means it's a phrase, not a name."""
+    toks = s.strip().rstrip(".").split()
+    if not toks or toks[0].lower() in ("a", "an", "the"):
+        return False
+    if any(t.islower() and t.lower() in _BYLINE_FUNC for t in toks):
+        return False
+    if len(toks) > 6:
+        return False
+    return all(t == "&" or re.fullmatch(r"[A-Z]\.?", t)
+               or re.fullmatch(r"[A-Z][\w'’.-]*", t) for t in toks)
+
+
+def _box_height(el) -> float:
+    bb = el.get("bbox") or []
+    return float(bb[3] - bb[1]) if len(bb) == 4 else 0.0
+
+
+def _box_top(el) -> float:
+    bb = el.get("bbox") or []
+    return float(bb[1]) if len(bb) == 4 else 0.0
+
+
+def _box_bottom(el) -> float:
+    bb = el.get("bbox") or []
+    return float(bb[3]) if len(bb) == 4 else 0.0
+
+
+def _el_text(el) -> str:
+    return re.sub(r"\s+", " ", (el.get("text") or "").strip())
+
+
+def _cover_title_ok(t: str) -> bool:
+    """A plausible cover title from a layout box — looser than `_is_title_like`
+    (an authoritative `Title` box may run longer than a running header), but still
+    rejects folios, slip fields, and mostly-symbol garble."""
+    t = (t or "").strip()
+    if not (3 <= len(t) <= _COVER_TITLE_MAXLEN) or _folio(t) or _SLIP_NOISE.match(t):
+        return False
+    letters = sum(c.isalpha() for c in t)
+    return letters >= 0.5 * len(t) and t[0].isalnum()
+
+
+def _pick_cover_title(elements) -> str:
+    """The book title from a layout+text response. The title is the largest type on
+    the cover: take the tallest `Title` box (joining same-size `Title` boxes for a
+    wrapped title, de-duping the front/spine repeat), then absorb a subtitle that
+    *hugs* it — the next box(es) below within `_COVER_SUBTITLE_GAP_RATIO` of the
+    title's height (the author/imprint sits farther down, so the gap stops there).
+    "" when the model labels no usable `Title` (caller falls back to the text
+    heuristic) — picking the next-largest text box would just resurface the author."""
+    titles = [el for el in elements
+              if el.get("category") == "Title" and _el_text(el)]
+    if not titles:
+        return ""
+    maxh = max(_box_height(el) for el in titles) or 1.0
+    head, seen = [], set()
+    for el in titles:                       # document order = top-to-bottom
+        if _box_height(el) >= _COVER_TITLE_FONT_RATIO * maxh:
+            t = _el_text(el)
+            if t.lower() not in seen:        # drop the front-cover/spine duplicate
+                seen.add(t.lower())
+                head.append(el)
+    if not head:
+        return ""
+    parts = [_el_text(el) for el in head]
+    # subtitle: boxes strictly below the title, each within half a title-height of the
+    # one above it (a tight gap = same title block; a wide gap = author/series/imprint).
+    bottom = max(_box_bottom(el) for el in head)
+    below = sorted((el for el in elements
+                    if el.get("category") in _COVER_SUBTITLE_CATS and _el_text(el)
+                    and _box_top(el) >= bottom),
+                   key=_box_top)
+    for el in below:
+        s = _el_text(el)
+        gap = _box_top(el) - bottom
+        if (gap > _COVER_SUBTITLE_GAP_RATIO * (_box_height(el) or maxh)
+                or len(parts) - len(head) >= _COVER_SUBTITLE_MAXLINES
+                or _SLIP_NOISE.match(s) or _folio(s) or _looks_like_byline(s)):
+            break
+        parts.append(s)
+        bottom = _box_bottom(el)
+    cand = " ".join(parts).strip()
+    return cand if _cover_title_ok(cand) else ""
+
+
+# Title detection needs the full MAX_EDGE image (the title is unreadable when downscaled
+# further — measured: a 1024px pass misses small-on-cover titles), but most covers don't
+# need a full 4096-token transcription: capping the decode keeps the common (sparse) cover
+# fast. A chatty/back-cover shot, though, overruns the cap and the truncated layout JSON
+# scrambles the boxes (a garbled title with a half-token tail) — so on truncation we MUST
+# redo at the full budget rather than trust the cut-off read. Adaptive: fast common case,
+# correct on the few text-heavy covers. Eval-tuned — IMPLEMENTATION_PLAN §16.
+COVER_LAYOUT_MAX_TOKENS = 1536
+
+
+def cover_title_layout(model, processor, config, img_path) -> str:
+    """One layout+text pass over a cover → its largest-font book title (or "").
+    Reuses the loaded model; the returned text NEVER enters the transcription body.
+    Caps the decode for speed, retrying at full budget if the cover overran the cap
+    (a truncated layout JSON yields a scrambled title, so it can't be trusted)."""
+    from mlx_vlm import generate
+    from mlx_vlm.prompt_utils import apply_chat_template
+
+    formatted = apply_chat_template(processor, config, COVER_TITLE_PROMPT, num_images=1)
+    res = generate(model, processor, formatted, image=[img_path],
+                   temperature=0.0, max_tokens=COVER_LAYOUT_MAX_TOKENS, verbose=False)
+    if getattr(res, "finish_reason", None) == "length":  # truncated → unreliable, redo full
+        res = generate(model, processor, formatted, image=[img_path],
+                       temperature=0.0, max_tokens=MAX_TOKENS, verbose=False)
+    return _pick_cover_title(_parse_layout(res.text) or [])
 
 
 def figure_captions(text: str):
@@ -648,6 +788,13 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
                 quality = text_quality(hi_text)
         typ = detect_type(text)
         role = "meta" if typ in ("COVER", "IMPRINT") else "body"
+        # Largest-font cover title: COVER shots pay one layout+text pass so the title
+        # is the biggest type on the page, not whatever line OCR'd first (§16). The
+        # chosen-orientation image is still on disk in `td`.
+        cover_title = ""
+        if typ == "COVER":
+            oriented = Path(td) / f"r{rot}.jpg"
+            cover_title = cover_title_layout(model, processor, config, str(oriented))
         # Gated figure detection: only body pages with a figure-ish caption pay the
         # extra layout pass; the chosen-orientation image is still on disk in `td`.
         caps = figure_captions(text) if role == "body" else []
@@ -671,7 +818,8 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
         "figures": figures,        # caption lines flagged as figures/maps (may be [])
         "raw_md": text if role == "body" else "",
         "ocr_text": text,  # always kept (debug / cover-title fallback)
-        "metadata": parse_metadata(typ, text) if role == "meta" else "",
+        "cover_title": cover_title,  # largest-font Title on a COVER ("" otherwise/none)
+        "metadata": parse_metadata(typ, text, cover_title) if role == "meta" else "",
         "running_header": running_header(text) if role == "body" else "",
         "page_numbers": page_numbers(text) if role == "body" else [],
         "datetime": exif["datetime"].isoformat() if exif["datetime"] else None,
@@ -680,6 +828,24 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
         "prompt_version": PROMPT_VERSION,
         "processed_at": datetime.datetime.now().isoformat(timespec="seconds"),
     }
+    save_cache(out_dir, img_path, rec)
+    return rec
+
+
+def backfill_cover_title(model, processor, config, img_path, out_dir, rec, model_name):
+    """Add the layout-derived `cover_title` (§16) to an already-cached COVER record
+    without re-running the full transcription. One layout+text pass at the cached
+    orientation; the field is then re-saved so the work is checkpointed and the next
+    run skips it (resumable, like the main batch). Marks the field even when empty so
+    a title-less cover isn't reprobed every run. Body OCR/cache are untouched."""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "cover.jpg"
+        prep_image(img_path, rec.get("rotation", 0), max_edge=MAX_EDGE).convert(
+            "RGB").save(p, "JPEG", quality=90)
+        title = cover_title_layout(model, processor, config, str(p))
+    rec["cover_title"] = title
+    if rec.get("role") == "meta":  # refresh the title: line from the new signal
+        rec["metadata"] = parse_metadata(rec.get("type"), rec.get("ocr_text", ""), title)
     save_cache(out_dir, img_path, rec)
     return rec
 
@@ -736,6 +902,9 @@ def page_header(rec) -> str:
     parsed/CIP title; for body pages use the running header at the top of the page
     (the repeated book/chapter title), ignoring folios and slip noise."""
     if rec.get("role") == "meta":
+        ct = (rec.get("cover_title") or "").strip()  # largest-font Title (§16) wins
+        if ct:
+            return ct
         mt = re.search(r"(?im)^\s*title:\s*(.+)$", rec.get("metadata", ""))
         if mt:
             t = mt.group(1).strip().strip("\"'")
@@ -1015,17 +1184,22 @@ def _fold_orphan_covers(books):
 # repeats "Wag NNN" / "Pick-up Location"). We split on that marker and read the spine
 # title out of each block — used to name an otherwise-untitled book by *exclusion*.
 _SPINE_SPLIT = re.compile(r"(?im)^\s*Wag\s*\d+\s*$")
-_SPINE_STOP = re.compile(r"(?i)\b(press|university|publish|librar|reference|room|"
+_SPINE_STOP = re.compile(r"(?i)\b(press|university|publish|librar|gener(?:al)?\s+ref|"
+                         r"reference|ref(?:erence)?\s+librar|state\s+librar|room|"
                          r"building|street|reading|bashir|macquarie|user group|"
                          r"pick-?up|location|n\.?s\.?w)\b")
 
 
 def _spine_titles(block: str):
     """Title-like lines in one spine block. The slip prints the spine title right
-    after its "User Group:" field, so read from there; drop authors (lone SURNAME),
-    publishers, and the address/boilerplate lines."""
+    after its "User Group:" field, so we REQUIRE that anchor and read from there;
+    a block without it is a slip fragment (e.g. a runaway-truncated "GENERAL REF"
+    library stamp), never a title. Drops authors (lone SURNAME), publishers, and
+    the address/boilerplate lines."""
     m = re.search(r"(?i)user group:?", block)
-    region = block[m.end():] if m else block
+    if not m:
+        return []
+    region = block[m.end():]
     out = []
     for line in region.splitlines():
         s = line.strip().lstrip("#>* ").strip()
@@ -1367,14 +1541,21 @@ def book_title(book) -> str:
     for m in sorted((m for m in book["metadata"] if m.get("type") == "COVER"),
                     key=lambda r: (_parse_dt(r.get("datetime")) or datetime.datetime.min,
                                    r["image"])):
-        mt = re.search(r"(?im)^\s*title:\s*(.+)$", m.get("metadata", ""))
-        c = mt.group(1).strip().strip("\"'") if mt else ""
-        if not c or _folio(c):
-            c = _cover_title(m.get("ocr_text", ""))
+        # the largest-font Title from the layout pass (§16) is authoritative; only when
+        # it's absent do we fall back to the cached title: line, then the text heuristic.
+        c = (m.get("cover_title") or "").strip()
+        if not c:
+            mt = re.search(r"(?im)^\s*title:\s*(.+)$", m.get("metadata", ""))
+            c = mt.group(1).strip().strip("\"'") if mt else ""
+            if not c or _folio(c):
+                c = _cover_title(m.get("ocr_text", ""))
         if c and _norm_title(c) not in _GENERIC_TITLES:
             # a running title repeated on many shots that disagrees means this "cover"
-            # is a stray/UI shot — trust the book's own running title instead.
-            if topn >= COVER_OVERRIDE_VOTES and not _hdr_match(c, top):
+            # is a stray/UI shot — trust the book's own running title instead. But a
+            # byline running header (e.g. the editors "Geoffrey Benjamin" printed as a
+            # verso header) is NOT a title and must never veto a real cover title (§16).
+            if (topn >= COVER_OVERRIDE_VOTES and not _hdr_match(c, top)
+                    and not _looks_like_byline(top)):
                 return top
             return c
 
@@ -1788,12 +1969,26 @@ def cmd_batch(args):
     records = []
     failures = []
     processed = 0
+    backfilled = 0
     run_start = time.perf_counter()
     for i, img in enumerate(images, 1):
         cached = None if args.force else load_cache(out_dir, img, args.model, PROMPT_VERSION)
         if cached is not None:
+            # One-time enrichment of pre-§16 caches: a COVER lacking the largest-font
+            # `cover_title` gets a single layout pass (no full re-OCR). Resumable.
+            if (cached.get("type") == "COVER" and "cover_title" not in cached
+                    and not args.no_cover_backfill):
+                if model is None:
+                    print(f"  loading model {args.model} ...", file=sys.stderr)
+                    model, processor, config = load_model(args.model)
+                cached = backfill_cover_title(model, processor, config, str(img),
+                                              str(out_dir), cached, args.model)
+                backfilled += 1
+                print(f"[{i}/{n}] {img.stem} → COVER (backfilled title: "
+                      f"{cached['cover_title'] or '—'})", file=sys.stderr)
+            else:
+                print(f"[{i}/{n}] {img.stem} → {cached['type']} (cached)", file=sys.stderr)
             records.append(cached)
-            print(f"[{i}/{n}] {img.stem} → {cached['type']} (cached)", file=sys.stderr)
             continue
         if model is None:  # lazy-load once, only when there's work to do
             print(f"  loading model {args.model} ...", file=sys.stderr)
@@ -1840,17 +2035,18 @@ def cmd_batch(args):
               f"{elapsed:.1f}s{pss}{tok}{run}{ql} {peak_gb:.1f}GB", file=sys.stderr)
 
     books = emit_all(out_dir, records, ris, merges, titles)  # final pass (covers the all-cached case)
+    bf = f", {backfilled} cover title(s) backfilled" if backfilled else ""
     if processed:
         wall = time.perf_counter() - run_start
         print(f"Done: {len(books)} books, {n} images "
               f"({processed} processed in {wall:.0f}s, "
-              f"{wall / processed:.1f}s/img avg) → {out_dir}/report.md "
+              f"{wall / processed:.1f}s/img avg{bf}) → {out_dir}/report.md "
               f"(instrumentation: {out_dir}/instrument.jsonl)", file=sys.stderr)
     if failures:
         print(f"WARNING: {len(failures)} image(s) failed and were skipped "
               f"(see {out_dir}/failures.jsonl): {', '.join(failures)}", file=sys.stderr)
-    else:
-        print(f"Done: {len(books)} books, {n} images (all cached) "
+    elif not processed:
+        print(f"Done: {len(books)} books, {n} images (all cached{bf}) "
               f"→ {out_dir}/report.md", file=sys.stderr)
 
 
@@ -1877,6 +2073,9 @@ def main():
     p_batch.add_argument("--model", default=DEFAULT_MODEL, help="MLX model id")
     p_batch.add_argument("--out", default="out", help="output directory")
     p_batch.add_argument("--force", action="store_true", help="ignore cache, recompute")
+    p_batch.add_argument("--no-cover-backfill", action="store_true",
+                         help="skip the one-time layout pass that adds largest-font "
+                              "cover titles to pre-§16 caches (keeps the fast emit-only path)")
     p_batch.set_defaults(func=cmd_batch)
 
     args = parser.parse_args()

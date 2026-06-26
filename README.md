@@ -107,6 +107,11 @@ recorded "key image" and can name an otherwise-untitled book by elimination.
 Capture-time and GPS are kept only as *soft, overridable* session hints (phone GPS
 jitters km within a session, so it never hard-splits). See `IMPLEMENTATION_PLAN.md §9`.
 
+A cover's **title is read from the largest type on the page, not reading order**: each
+COVER shot gets one extra layout pass and the tallest `Title` box (plus a subtitle that
+hugs it) wins, so a book isn't named after the publisher or author that happens to OCR
+first. See `IMPLEMENTATION_PLAN.md §16`.
+
 **Optional hints (all live in `in/`, all no-ops if absent, none ever touch the cache).**
 - **Bibliography** (`*.ris`): drop a Zotero/RIS export in and `batch` matches each book
   to it to **correct the title** and **complete author / publisher / year / ISBN / city**

@@ -60,3 +60,24 @@ LAYOUT_PROMPT = (
     "'Section-header', 'Table', 'Text', 'Title']. Do not output the text content. "
     "The output must be a single JSON array."
 )
+
+# ---------------------------------------------------------------------------
+# Cover-title prompt (largest-font Title selection — IMPLEMENTATION_PLAN §16)
+# ---------------------------------------------------------------------------
+# The body OCR (PROMPT) emits a cover's text in spatial *reading* order, which
+# puts the publisher/author/imprint first as often as the title — so taking the
+# first title-like line (`_cover_title`) named books after their publisher
+# ("The Guilford Press") or author ("Geoffrey Benjamin"). A book title is the
+# *largest font* on the cover, not the first line, so we ask for layout WITH text
+# (unlike LAYOUT_PROMPT, which suppresses text) and pick the tallest `Title`
+# element's bbox. Used ONLY on COVER shots to set the title; its text never enters
+# the transcription body. Tune via `python ocr.py batch` cover output, not inference.
+COVER_TITLE_PROMPT = (
+    "Please output the layout information from this image, including each layout "
+    "element's bbox, its category, and the corresponding text content within the "
+    "bbox. The bbox should be in the format [x1, y1, x2, y2]. The layout categories "
+    "are ['Caption', 'Footnote', 'Formula', 'List-item', 'Page-footer', "
+    "'Page-header', 'Picture', 'Section-header', 'Table', 'Text', 'Title']. The "
+    "output must be a single JSON array of objects, each with keys 'bbox', "
+    "'category', and 'text'."
+)
