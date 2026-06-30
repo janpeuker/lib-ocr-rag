@@ -402,21 +402,53 @@ IMPRINT_MARKERS = re.compile(
     r"(?i)\b(isbn|first published|all rights reserved|"
     r"catalogu(?:e|ing)[- ]in[- ]publication|library of congress|"
     r"printed in|no part of this (?:book|publication))\b|©")
-COVER_TEXT_MAX = 280  # below this many non-space chars (and no imprint marker) → cover/spine shot
+COVER_TEXT_MAX = 280   # sparse text → COVER regardless of colour (floor; B&W covers land here)
+COVER_CEILING = 700    # hard upper limit for colour-assisted detection
+COVER_SCORE_MIN = 0.30 # min combined score: colorfulness × (1 − nchars/COVER_CEILING)
+# A library label ("Handling the Collection") can push a real cover over COVER_TEXT_MAX.
+# The score trades off colour against text density so more text demands more colour:
+#   at 280 chars → need colorfulness ≥ 0.50; at 350 → 0.60; at 450 → 0.83
+# This prevents colourful figures embedded in body text from qualifying (they have
+# too much surrounding text to score above COVER_SCORE_MIN).
 ISBN_RE = re.compile(r"(?i)\bISBN[:\s]*((?:97[89][\s-]?)?[\d][\d\s-]{7,14}[\dXx])")
 YEAR_RE = re.compile(r"(?i)(?:©|\(c\)|copyright|first published)[^\n]*?\b((?:19|20)\d{2})\b")
 PUBLISHER_RE = re.compile(r"(?i)published[^\n]*?\bby\b[:\s]*\n?\s*([^\n]+)")
 
 
-def detect_type(text: str) -> str:
-    """COVER / IMPRINT / SPREAD / PAGE from the OCR'd text of a shot."""
+def _image_colorfulness(img_path: str) -> float:
+    """Fraction of pixels (in a 128×128 thumbnail) with meaningful HSV saturation
+    (S>60) and brightness (V>30). Near-white and near-black pixels are excluded.
+    A full-bleed colour cover scores ≥0.60; a white text page with a small map < 0.50."""
+    img = Image.open(img_path).convert("RGB").resize((128, 128), Image.LANCZOS).convert("HSV")
+    _, s_ch, v_ch = img.split()
+    s_bytes, v_bytes = s_ch.tobytes(), v_ch.tobytes()
+    n = len(s_bytes)
+    return sum(1 for i in range(n) if s_bytes[i] > 60 and v_bytes[i] > 30) / n
+
+
+def detect_type(text: str, img_path: str | None = None) -> str:
+    """COVER / IMPRINT / SPREAD / PAGE from the OCR'd text of a shot.
+    When img_path is given, colour assists cover detection in the text-grey-zone."""
     t = text.strip()
+    nchars = len(re.sub(r"\s+", "", t))
     has_marker = bool(IMPRINT_MARKERS.search(t))
-    if len(re.sub(r"\s+", "", t)) < COVER_TEXT_MAX and not has_marker:
-        return "COVER"
     if has_marker:
         return "IMPRINT"
-    if len(re.findall(r"###\s*Page\s+\d+", t)) >= 2:
+    if nchars < COVER_TEXT_MAX:
+        return "COVER"
+    if img_path and nchars < COVER_CEILING:
+        sparsity = 1.0 - nchars / COVER_CEILING
+        if _image_colorfulness(img_path) * sparsity >= COVER_SCORE_MIN:
+            return "COVER"
+    pages = re.split(r"###\s*Page\s+\d+", t)
+    if len(pages) >= 3:  # 3 parts = 2 "### Page N" headers → spread
+        # A spread where one page is a title/imprint page: promote to IMPRINT so
+        # parse_metadata can extract the bibliographic fields.  Guard: the matching
+        # page must be short (< 1500 chars) to avoid a block-quote about copyright law.
+        IMPRINT_PAGE_MAX = 1500
+        if any(IMPRINT_MARKERS.search(p) and len(re.sub(r"\s+", "", p)) < IMPRINT_PAGE_MAX
+               for p in pages):
+            return "IMPRINT"
         return "SPREAD"
     return "PAGE"
 
@@ -786,7 +818,7 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
             if text_quality(hi_text) > quality:  # sharper read is cleaner → adopt it
                 text, stats, score = hi_text, hi_stats, _text_score(hi_text)
                 quality = text_quality(hi_text)
-        typ = detect_type(text)
+        typ = detect_type(text, img_path=str(img_path))
         role = "meta" if typ in ("COVER", "IMPRINT") else "body"
         # Largest-font cover title: COVER shots pay one layout+text pass so the title
         # is the biggest type on the page, not whatever line OCR'd first (§16). The

@@ -1014,6 +1014,132 @@ author surname or an imprint line) is unchanged by §16 and still needs `in/titl
 
 ---
 
+## 17. Colour-assisted cover detection (run 2026-06-30)
+
+**Problem.** `detect_type` classified a page as COVER solely on character count
+(`nchars < COVER_TEXT_MAX = 280`).  A book photographed in front of a library shelf label
+("Handling the Collection / Reading Room C" on IMG_9458) had the label's real text *plus*
+hallucinated fragments pushing the count to 301 — just over the threshold.  Result: the
+cover was typed PAGE/body, named a standalone book "Handling the Collection", and the §16
+largest-font logic never ran.
+
+**Solution.** `_image_colorfulness(img_path)` — a 128 × 128 HSV thumbnail pass (PIL only,
+~2 ms) that returns the fraction of pixels with meaningful saturation (S > 60) and
+brightness (V > 30), excluding near-white and near-black pixels.  `detect_type` now accepts
+an optional `img_path` and, for pages in the "grey zone" (`COVER_TEXT_MAX ≤ nchars <
+COVER_CEILING = 700`), tests the **combined score**:
+
+```
+score = colorfulness × (1 − nchars / COVER_CEILING)
+if score ≥ COVER_SCORE_MIN (0.30) → COVER
+```
+
+The multiplicative form trades the two signals off continuously: more text demands more
+colour, so colourful figures embedded in body text (moderate colour + high char count) score
+too low, while a real cover behind a library label (high colour + moderate char count) scores
+above the threshold.  Calibrated against the full corpus (116 grey-zone body pages):
+
+| Image | nchars | colorfulness | score | verdict |
+|-------|--------|-------------|-------|---------|
+| IMG_9458 (cover + library label) | 351 | 0.645 | 0.322 | → COVER ✓ |
+| IMG_5537 (BL supply slip, "Coastal Urbanities") | 313 | 0.718 | 0.397 | → COVER ✓ |
+| IMG_0130 (series page, sat 0.509) | 317 | 0.509 | 0.278 | stays PAGE ✓ |
+| IMG_7400 (map page, sat 0.416) | 321 | 0.416 | 0.225 | stays PAGE ✓ |
+| IMG_0142 (hallucinated list, sat 0.389) | 492 | 0.389 | 0.115 | stays PAGE ✓ |
+
+Exactly 2 promotions in the full cache — both reasonable.
+
+**Effective required colorfulness by text count:**
+- 280 chars → need ≥ 0.50 — any moderately colourful cover qualifies
+- 350 chars → need ≥ 0.60 — full-bleed photographic cover required
+- 450 chars → need ≥ 0.83 — near-full-bleed required; practically only real covers reach this
+- ≥ 480 chars → effectively impossible (would need > 100 % colourfulness)
+
+**Cache note.** This only affects images OCR'd *after* the change; the existing IMG_9458
+cache (typed PAGE) is handled by the `in/merges.txt` + `in/titles.txt` entries added in the
+same session.  To get the clean fix (proper COVER + §16 cover_title layout pass): delete
+`out/cache/IMG_9458.json` and re-run `python ocr.py batch`.
+
+**Constants (all in `ocr.py`):** `COVER_TEXT_MAX = 280`, `COVER_CEILING = 700`,
+`COVER_SCORE_MIN = 0.30`.  Tune the score threshold against the grey-zone page list;
+bump COVER_CEILING if you encounter a genuine cover that can't stay below 700 chars.
+
+---
+
+## 18. Title/imprint page gap — SPREAD embedding + positional promotion (planned)
+
+**Background.** Investigated while examining why IMG_9458 needed a manual fix (§17).
+The question: *are "library index pages" — copyright pages, title pages, "Also Available"
+spreads — being detected and used correctly?*
+
+**Corpus review** (six representative examples — IMG_3007, IMG_2986, IMG_2882, IMG_2849,
+IMG_2275, IMG_2230, plus IMG_4074, IMG_3213, IMG_3037):
+
+- All copyright/imprint pages (©, "first published", "all rights reserved", "Library of
+  Congress") → **already IMPRINT** ✓ — the existing `IMPRINT_MARKERS` regex catches them.
+- Cover-only pages (< 280 chars) → **already COVER** ✓.
+- IMG_2230 is the "no cover, imprint only" case: correctly IMPRINT, and `parse_metadata`
+  extracts a full CIP block with title, author, publisher, year.  Works.
+
+**Two genuine gaps:**
+
+### Gap A — IMPRINT embedded in a SPREAD
+
+IMG_3104 is a two-page spread: page 1 = "Also Available / Five Billion Years of Global
+Change / Denis Wood / …" (series list); page 2 = "WEAPONIZING MAPS / Indigenous Peoples and
+Counterinsurgency in the Americas / Joe Bryan and Denis Wood / THE GUILFORD PRESS".
+
+`detect_type` sees two `### Page N` headers → **SPREAD** fires before the per-record IMPRINT
+check can run.  The title page (page 2) lands in `raw_md` as body text; its title is never
+fed into `parse_metadata`.
+
+**Fix:** In `detect_type`, before returning SPREAD, split the OCR text on `### Page N`
+boundaries and test `IMPRINT_MARKERS` against each page individually.  If any page matches,
+return IMPRINT instead of SPREAD.  One-liner change, no new dependencies.
+
+```python
+# proposed addition inside detect_type, just before the SPREAD return:
+pages = re.split(r"###\s*Page\s+\d+", t)
+if any(IMPRINT_MARKERS.search(p) for p in pages):
+    return "IMPRINT"
+```
+
+Risk: a SPREAD whose *body* page coincidentally contains "all rights reserved" (e.g., a
+block-quote about copyright law) would become IMPRINT.  Mitigate with a char-count guard:
+only promote if the matching page is short enough to be an imprint (e.g., < 1 500 chars).
+
+### Gap B — Title-only pages taken in place of a cover
+
+The user sometimes photographs a title page (title + author + publisher, no © block) instead
+of the cover.  These pages are white, sparse (say 280–600 chars), and carry no standard
+imprint markers — so they fall through as body PAGEs.  The colour score (§17) can't help:
+white pages score near zero.
+
+**Signal:** position.  These pages come as the **first page(s) of a book session**, often
+immediately after or instead of a COVER.  No content-only detector can reliably distinguish a
+bare title page from a short chapter opener.
+
+**Proposed fix (grouper-level, not detect_type):**  In `group_images`, after the initial
+grouping pass, look at each book that has **no COVER or IMPRINT** in its first two records.
+If the first body record is:
+- sparse (nchars < a threshold, e.g. 500), AND
+- its first real line is title-like (`_is_title_like`), AND
+- there is no running-header disagreement later in the group (i.e., the body pages'
+  headers are consistent with that first line being the book's title),
+then promote that first body record to a synthetic IMPRINT: call `parse_metadata("IMPRINT",
+text)` on it and inject the result into the book's `metadata` list.
+
+This is additive (existing COVER/IMPRINT records are untouched) and does not change the
+cache (it's a grouper transformation).
+
+**Do not implement without more examples.** The "title-only, no ©" page is rarer than it
+looks: the corpus review found that virtually every photographed info page has at least one
+IMPRINT_MARKERS hit.  Validate with a targeted search (`python ocr.py batch` → report →
+identify books whose title is an author name or "Untitled") before building the positional
+detector.
+
+---
+
 ## Appendix — Historic reference (original single-page design)
 
 Condensed from the first plan; kept for rationale, not as current instructions.
