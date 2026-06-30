@@ -95,7 +95,7 @@ in-prompt figure instruction when transcribing, so for any body page that has a
 standalone `Map`/`Figure`/`Table`/`Plate` caption, a second **layout-only** pass
 (bbox+category, never fed back into the text) confirms the region and the caption line
 becomes a `> **[Figure — …]**` placeholder. Only figure-suspect pages pay the extra
-pass (~+3% batch-wide). See `IMPLEMENTATION_PLAN.md §8.4` for the experiment that chose
+pass (~+3% batch-wide). See `specs/005-figure-detection/` for the experiment that chose
 this over a separate image classifier.
 
 Images are then grouped into books by **title identity**: each shot's running
@@ -105,12 +105,14 @@ days). A library call number changing, or a confirmed page-number reset, splits
 adjacent books; a shelf/spine overview shot is folded into the next book as a
 recorded "key image" and can name an otherwise-untitled book by elimination.
 Capture-time and GPS are kept only as *soft, overridable* session hints (phone GPS
-jitters km within a session, so it never hard-splits). See `IMPLEMENTATION_PLAN.md §9`.
+jitters km within a session, so it never hard-splits). See `specs/006-book-grouping/`,
+`specs/011-burst-session-hint/`, and `specs/012-cover-position-heuristic/`.
 
 A cover's **title is read from the largest type on the page, not reading order**: each
 COVER shot gets one extra layout pass and the tallest `Title` box (plus a subtitle that
 hugs it) wins, so a book isn't named after the publisher or author that happens to OCR
-first. See `IMPLEMENTATION_PLAN.md §16`.
+first. See `specs/008-cover-title-largest-font/` (and `specs/009-colour-cover-detection/`
+for how a colourful cover behind a library label is still recognised as a COVER).
 
 **Optional hints (all live in `in/`, all no-ops if absent, none ever touch the cache).**
 - **Bibliography** (`*.ris`): drop a Zotero/RIS export in and `batch` matches each book
@@ -158,10 +160,11 @@ python ocr.py batch in/ --model mlx-community/Qwen2.5-VL-3B-Instruct-4bit
 ### Planned improvements
 
 - **Robust cover/spine detection** — the multi-spine shelf photo (e.g. IMG_4310) is
-  still misrouted by the text heuristic. The §8.4 experiment showed the layout pass can
-  flag it (sparse text + several `Picture` regions); wiring that into shot-type routing
-  is the open follow-up. (A separate SigLIP classifier nailed it but was rejected: it
-  adds a second resident model against the single-model constraint — see §8.4.)
+  still misrouted by the text heuristic. The figure-detection experiment showed the layout
+  pass can flag it (sparse text + several `Picture` regions); wiring that into shot-type
+  routing is the open follow-up. (A separate SigLIP classifier nailed it but was rejected:
+  it adds a second resident model against the single-model constraint — see
+  `specs/005-figure-detection/`.)
 - **Remove the text printed inside a figure** — a figure/map is now *flagged* with a
   placeholder, but the words printed *inside* the map (place names, legend labels) still
   show up as ordinary text in the output. To delete them we'd switch the layout pass to
@@ -172,7 +175,8 @@ python ocr.py batch in/ --model mlx-community/Qwen2.5-VL-3B-Instruct-4bit
 The central report, structured progress logging, offline enforcement, JSONL
 instrumentation, and gated figure detection described above are now implemented.
 
-See `IMPLEMENTATION_PLAN.md` §8 for the remaining detection work.
+See `specs/005-figure-detection/` for the remaining detection work, and
+`specs/019-title-imprint-gaps/` for the proposed title-page detection (Gap B).
 
 ## Look up citations (local RAG)
 
@@ -185,7 +189,8 @@ page-sized chunks, **dense embeddings** (`BAAI/bge-small-en-v1.5` on MPS) stored
 float32 BLOBs, plus a **SQLite FTS5** lexical index. A query runs both channels and
 fuses them with Reciprocal Rank Fusion — dense handles paraphrase, lexical catches
 exact names/terms, so an approximate author + a fuzzy concept both work. See
-`IMPLEMENTATION_PLAN.md §12`.
+`specs/016-rag-retrieval-engine/` (engine + the SQLite/numpy/RRF decisions),
+`specs/017-rag-cli/` (CLI), and `specs/018-rag-mcp-integration/` (MCP/Skill).
 
 ```bash
 source .venv/bin/activate
@@ -316,7 +321,8 @@ the eval floor and `MAX_EDGE` stays 1600 as the quality-gated escalation target.
 1280 is non-lossy down to fixture resolution and that 1024 breaks — it can't directly
 prove 1280 ≈ 1600 on full 12 MP captures; the escalation backstops that residual risk.
 
-See `IMPLEMENTATION_PLAN.md` for the full design rationale.
+See the feature specs under `specs/` for the full design rationale (per-story
+requirements + decision logs; `specs/README.md` is the index).
 
 ## Acknowledgements
 

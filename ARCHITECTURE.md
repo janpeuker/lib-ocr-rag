@@ -1,8 +1,9 @@
 # ARCHITECTURE
 
-How this package is built and *why*. For task-level guidance see `CLAUDE.md`; for
-the chronological design log and superseded designs see `IMPLEMENTATION_PLAN.md`.
-This document is the durable "shape of the system" overview.
+How this package is built and *why*. For task-level guidance see `CLAUDE.md`; for the
+per-feature requirements, decision logs, and superseded designs see the spec-kit specs
+under `specs/` (`specs/README.md` is the index; `.specify/memory/constitution.md` the
+governing principles). This document is the durable "shape of the system" overview.
 
 ---
 
@@ -156,7 +157,7 @@ a guard, the whole batch. `load_model()` applies an idempotent monkeypatch
 library's own `finalize()`), so the bad byte is dropped and the ASCII text is recovered
 intact. `cmd_batch` additionally wraps each page in try/except → `out/failures.jsonl`, so
 any *other* unrecoverable page can't sink an overnight run. **Both are flagged for revisit
-on every `mlx-vlm` bump** (`CLAUDE.md`, `IMPLEMENTATION_PLAN.md §13`).
+on every `mlx-vlm` bump** (`CLAUDE.md`, `specs/015-resumability-resilience/`).
 
 ---
 
@@ -312,6 +313,8 @@ integration/            portable Skill + MCP bundle for *other* projects
 test/                   eval fixtures (*.jpeg + *_text.txt) — reused, not added to
 out/                    book_*.md/.txt, cache/, report.md, index.md, rag.db, *.log
 CLAUDE.md               task-level working rules
-IMPLEMENTATION_PLAN.md  chronological design log + historic appendix
+specs/                   spec-kit feature specs (per-story requirements + decision logs)
+.specify/memory/         constitution.md — governing principles
+IMPLEMENTATION_PLAN.md  retired — §-number → spec redirect map
 ARCHITECTURE.md         this document
 ```

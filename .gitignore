@@ -6,6 +6,7 @@ __pycache__/
 *.bak
 .*
 !.gitignore
+!.specify/
 eval_out/
 experiments/
 rag_probes.json

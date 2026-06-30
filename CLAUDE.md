@@ -1,7 +1,9 @@
 # CLAUDE.md
 
-Guidance for working in this repo. See `IMPLEMENTATION_PLAN.md` for full rationale
-and `README.md` for usage.
+Guidance for working in this repo. See `specs/` for the full requirements + rationale
+(spec-kit layout; `specs/README.md` is the index, `.specify/memory/constitution.md`
+the governing principles) and `README.md` for usage. `IMPLEMENTATION_PLAN.md` is
+retired — it now only maps the old §-numbers to their spec.
 
 ## What this is
 
@@ -36,17 +38,20 @@ and drops handwritten annotations.
   absent ⇒ no-op, never touches the cache). `IMG_a + IMG_b` folds whole books;
   `IMG_host += IMG_x` moves a stray shot. `out/merge_candidates.json` is a ranked
   discovery aid for populating it. Re-run `python rag.py index` after to refresh the
-  catalog. Rationale + the validated fixture in `IMPLEMENTATION_PLAN.md §14`.
+  catalog. Rationale + the validated fixture in `specs/013-duplicate-merge/`.
 - **Title overrides** (`in/titles.txt`, optional, same no-op-if-absent contract as
   `merges.txt`/`*.ris`): `IMG_xxxx = Some Title` forces a book's title when the OCR
   can't derive it — a title buried in a title-page *list* (a series page) or lost to a
   runaway read, AND not recoverable from the RIS. Last resort; prefer fixing the read or
-  the bibliography first. Cover-title resolution + this hint are in `IMPLEMENTATION_PLAN.md §15`.
-- **Cover titles come from the largest font, not reading order** (`§16`). A COVER shot
+  the bibliography first. The RIS + title-override hints are in
+  `specs/010-bibliography-title-hints/`; base cover-title resolution in
+  `specs/007-bibliographic-metadata/`.
+- **Cover titles come from the largest font, not reading order**
+  (`specs/008-cover-title-largest-font/`). A COVER shot
   gets one extra `dots.mocr` layout+text pass (`COVER_TITLE_PROMPT`); `_pick_cover_title`
   takes the tallest `Title` bbox so a book isn't named after the publisher/author that
   happens to OCR first. The result is cached as `cover_title` and **backfilled** into
-  pre-§16 caches on the next `batch` (one layout pass per cover, resumable;
+  older (pre-largest-font) caches on the next `batch` (one layout pass per cover, resumable;
   `--no-cover-backfill` keeps the fast emit-only path). No `Title` box (a stylized title
   the model folds into the cover image) ⇒ `cover_title` is `""` and the old reading-order
   text heuristic (`_cover_title`) still runs — so don't "fix" the empty case by grabbing
@@ -60,13 +65,14 @@ and drops handwritten annotations.
   `controvert`, would otherwise crash the whole page/batch). When bumping `mlx-vlm`: check
   if upstream fixed `add_token` and **delete the patch if so**; regression-test with
   `python ocr.py run in/IMG_5906.jpeg` (must produce text, not raise). Full rationale and
-  revisit checklist in `IMPLEMENTATION_PLAN.md §13`.
+  revisit checklist in `specs/015-resumability-resilience/`.
 
 ## Local RAG (`rag.py`)
 
 A second, separate tool (deps in `requirements-rag.txt`, not `requirements.txt`):
 offline hybrid retrieval over the `out/book_*.md` the OCR tool produces, so Claude
-can look up citations without loading whole books. See `IMPLEMENTATION_PLAN.md §12`.
+can look up citations without loading whole books. See `specs/016-rag-retrieval-engine/`
+(engine), `specs/017-rag-cli/` (CLI), and `specs/018-rag-mcp-integration/` (MCP/Skill).
 
 - **Run** (always `source .venv/bin/activate` first; offline with `HF_HUB_OFFLINE=1`):
   - `python rag.py index` — chunk `out/book_*.md` → embed → build `out/rag.db`.
@@ -104,9 +110,12 @@ can look up citations without loading whole books. See `IMPLEMENTATION_PLAN.md �
 ## Working preferences
 
 - **Record durable guidance here in `CLAUDE.md`, not in the memory system.**
-- Persist implementation plans into `IMPLEMENTATION_PLAN.md` (not just the ephemeral
-  plan file); compress superseded designs into a "Historic reference" appendix rather
-  than deleting them.
+- Persist durable design as **spec-kit feature specs** under `specs/<NNN>-<slug>/spec.md`
+  (User Scenarios + numbered `FR-###` requirements + a non-normative Decision log), with the
+  governing principles in `.specify/memory/constitution.md`. Add a new story the spec-kit way
+  — write the requirements before the code — and index it in `specs/README.md`. Don't revive
+  the chronological `IMPLEMENTATION_PLAN.md` (retired to a §→spec map); record superseded
+  designs in the relevant spec's Decision log rather than deleting them.
 - Plans must be split into discrete, independently-testable steps, and long batch
   pipelines must be **resumable** — checkpoint expensive work to disk (per-item cache,
   resume-by-default, `--force` to recompute) so a session killed by exhausted usage
