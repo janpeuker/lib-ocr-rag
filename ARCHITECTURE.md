@@ -313,8 +313,7 @@ integration/            portable Skill + MCP bundle for *other* projects
 test/                   eval fixtures (*.jpeg + *_text.txt) — reused, not added to
 out/                    book_*.md/.txt, cache/, report.md, index.md, rag.db, *.log
 CLAUDE.md               task-level working rules
-specs/                   spec-kit feature specs (per-story requirements + decision logs)
+specs/                   spec-kit feature specs + experiments/ (negative/deferred cards)
 .specify/memory/         constitution.md — governing principles
-IMPLEMENTATION_PLAN.md  retired — §-number → spec redirect map
 ARCHITECTURE.md         this document
 ```

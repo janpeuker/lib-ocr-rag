@@ -2,8 +2,7 @@
 
 Guidance for working in this repo. See `specs/` for the full requirements + rationale
 (spec-kit layout; `specs/README.md` is the index, `.specify/memory/constitution.md`
-the governing principles) and `README.md` for usage. `IMPLEMENTATION_PLAN.md` is
-retired — it now only maps the old §-numbers to their spec.
+the governing principles) and `README.md` for usage.
 
 ## What this is
 
@@ -113,9 +112,9 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
 - Persist durable design as **spec-kit feature specs** under `specs/<NNN>-<slug>/spec.md`
   (User Scenarios + numbered `FR-###` requirements + a non-normative Decision log), with the
   governing principles in `.specify/memory/constitution.md`. Add a new story the spec-kit way
-  — write the requirements before the code — and index it in `specs/README.md`. Don't revive
-  the chronological `IMPLEMENTATION_PLAN.md` (retired to a §→spec map); record superseded
-  designs in the relevant spec's Decision log rather than deleting them.
+  — write the requirements before the code — and index it in `specs/README.md`. Don't keep a
+  single chronological plan doc; record superseded designs in the relevant spec's Decision log,
+  or as a card in `specs/experiments/` for rejected/deferred work, rather than deleting them.
 - Plans must be split into discrete, independently-testable steps, and long batch
   pipelines must be **resumable** — checkpoint expensive work to disk (per-item cache,
   resume-by-default, `--force` to recompute) so a session killed by exhausted usage

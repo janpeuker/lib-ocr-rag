@@ -8,7 +8,7 @@ __pycache__/
 !.gitignore
 !.specify/
 eval_out/
-experiments/
+/experiments/
 rag_probes.json
 nohup.out
 

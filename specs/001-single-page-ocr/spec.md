@@ -1,6 +1,6 @@
 # Feature 001 — Single-page OCR + model eval
 
-**Status:** Delivered · **Origin:** `library-ocr@c04a47f` · **Old ref:** IMPLEMENTATION_PLAN Appendix
+**Status:** Delivered · **Origin:** `library-ocr@c04a47f` · **Old ref:** §Appendix
 **Constitution:** I, II, III, IV, VI
 
 ## User Scenarios & Testing
@@ -69,12 +69,30 @@ page without retyping it.
   transcription but aren't steerable → rejected.
 - **Runtime `mlx-vlm`** runs document VLMs on the M3 GPU, with first-class auto-prompt
   support for `dots.ocr`/`dots.mocr`.
-- **Model choice rule:** pick the smallest model whose `IMG_3020` (annotated page) score
-  is acceptable — a high score there means handwriting is actually being dropped.
-- **Measured (M3, this prompt):** `dots.mocr-4bit` 0.835 / 0.945 / mean 0.890 (default);
-  `olmOCR-7B-0725-4bit` 0.528 / 0.916 / 0.722 (heavier, *worse* here — mid-paragraph hard
-  wraps and hyphen-break artifacts hurt the flattened ratio); `Qwen2.5-VL-3B` 0.552 /
-  0.891 / 0.721; `dots.ocr-4bit` ~0 (echoes the prompt — not steerable). Conclusion: keep
-  the small, fast `dots.mocr-4bit` default.
+- **Eval method.** `ocr.py eval` flattens both prediction and ground truth (lowercase,
+  strip Markdown, collapse whitespace) and reports `difflib.SequenceMatcher.ratio()` — zero
+  extra deps. `IMG_3020` is the diagnostic page: a high score there means handwriting is
+  actually being dropped. **Decision rule:** pick the smallest model whose `IMG_3020` score
+  is acceptable.
+- **Measured (M3, 16 GB, this repo's prompt):**
+
+  | Model (MLX id) | IMG_3018 | IMG_3020 | mean | note |
+  |---|---|---|---|---|
+  | `mlx-community/dots.mocr-4bit` | 0.835 | 0.945 | **0.890** | **DEFAULT** — light, fast, Markdown |
+  | `mlx-community/olmOCR-7B-0725-4bit` | 0.528 | 0.916 | 0.722 | 7B, *worse* here (see below) |
+  | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | 0.552 | 0.891 | 0.721 | general-VLM baseline |
+  | `mlx-community/dots.ocr-4bit` | 0.013 | 0.004 | 0.009 | echoes the prompt — not steerable |
+
+- **Why the heavier model loses.** `olmOCR-7B` (the plan's "best-fidelity" opt-in) scored
+  *lower*: it hard-wraps lines mid-paragraph with trailing spaces and hyphen-break artifacts
+  (`legal- governmental`), producing many small mismatches once flattened, whereas
+  `dots.mocr` emits clean reflowed paragraphs. The non-multilingual `dots.ocr` variant
+  ignores the instruction prompt and emits junk; `Qwen2.5-VL-3B` transcribes but is far less
+  accurate. (The bake-off losers have their own card — see
+  [`specs/experiments/003-heavier-ocr-models.md`](../experiments/003-heavier-ocr-models.md).)
+- **Residual gap is ground-truth idiosyncrasy.** The remaining `IMG_3018` gap for every model
+  is mostly the fixture truth dropping one footnote superscript and keeping a running header,
+  not OCR error. Conclusion: keep the small, fast `dots.mocr-4bit` default — on real pages it
+  beats the heavier alternatives.
 - **Out of scope (then):** batching many pages and citation-manager import — became the
-  core of feature 002 and 011.
+  core of feature 002 and 016.

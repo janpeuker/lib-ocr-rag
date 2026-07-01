@@ -1,10 +1,8 @@
 # Specifications (spec-kit layout)
 
-This directory is the **source of truth for what the system does and why**. It
-replaces the chronological `IMPLEMENTATION_PLAN.md` (now a tombstone redirect) by
-decomposing the work into discrete, independently-testable **feature specs**,
-reconstructed from the commit history of both this repo and its parent
-`library-ocr`.
+This directory is the **source of truth for what the system does and why** —
+discrete, independently-testable **feature specs**, reconstructed from the commit
+history of both this repo and its parent `library-ocr`.
 
 Layout follows [github/spec-kit](https://github.com/github/spec-kit):
 
@@ -48,6 +46,11 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 017 | [RAG CLI (index · search · get-page · eval)](017-rag-cli/spec.md) | Delivered | `0558341`, `29e81dd`, `56ef31e` | §12.7, §12.9 |
 | 018 | [RAG MCP server + integration bundle](018-rag-mcp-integration/spec.md) | Delivered | `061d04f` | §12.7 |
 | 019 | [Title/imprint detection gaps](019-title-imprint-gaps/spec.md) | Gap A done · Gap B proposed | `5f90a77` | §18 |
+
+**Negative results & deferred work** live as lighter cards in
+[`specs/experiments/`](experiments/README.md) — features we tried and rejected/removed,
+and work we understood but haven't built. They preserve the learning from the gitignored
+`experiments/` code dir.
 
 History note: the parent `library-ocr` carries the full commit-by-commit history
 (`a63e4bd` → `ef5145e`); this fork (`lib-ocr-rag`) squashes that into its

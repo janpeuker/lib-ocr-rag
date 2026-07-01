@@ -1,6 +1,6 @@
 # Feature 002 — Batch a folder, grouped per book
 
-**Status:** Delivered · **Origin:** `library-ocr@eb26153` · **Old ref:** IMPLEMENTATION_PLAN §1–§7
+**Status:** Delivered · **Origin:** `library-ocr@eb26153` · **Old ref:** §1–§7
 **Constitution:** I, II, III, V, VII
 
 ## User Scenarios & Testing
