@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import datetime
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -391,6 +392,50 @@ def save_cache(out_dir, img_path, record: dict) -> None:
     p = cache_path(out_dir, img_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# --- content-checksum dedup (§20) ----------------------------------------- #
+# Camera-roll exports sometimes carry the same photo twice under a name-twin
+# ("IMG_5097 (1).jpeg" == "IMG_5097.jpeg"). Fold byte-identical copies to one
+# canonical file so a page is neither OCR'd twice nor a double hit in RAG — but
+# key on *content*, never the name: a roll that flips a "(1)" can put a genuinely
+# different shot under the twin (IMG_4867: 1.86 MB vs 0.43 MB), and both must survive.
+_COPY_SUFFIX = re.compile(r" \(\d+\)$")  # the " (1)" macOS/Photos copy marker
+
+
+def content_key(path) -> str:
+    """SHA-256 of the file's bytes — the identity used to fold duplicate photos."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _canonical_dup(paths):
+    """Pick the canonical file of a byte-identical group: prefer the clean name
+    (no ' (N)' copy suffix), then the shortest stem, then lexicographic — so the
+    tidy original wins the page label and the `image_path` escape hatch."""
+    return min(paths, key=lambda p: (bool(_COPY_SUFFIX.search(p.stem)),
+                                     len(p.stem), p.name))
+
+
+def dedup_by_content(images):
+    """Fold byte-identical photos to one canonical file each. Returns
+    (unique_sorted, aliases) where aliases maps canonical name -> [dropped names].
+    Distinct content is always kept, even under a name-twin filename."""
+    groups = {}
+    for p in images:
+        groups.setdefault(content_key(p), []).append(p)
+    unique, aliases = [], {}
+    for members in groups.values():
+        if len(members) == 1:
+            unique.append(members[0])
+            continue
+        canon = _canonical_dup(members)
+        unique.append(canon)
+        aliases[canon.name] = sorted(m.name for m in members if m != canon)
+    return sorted(unique), aliases
 
 
 # --- text-based shot detection (Option A) --------------------------------- #
@@ -1756,8 +1801,11 @@ def write_index(out_dir, records, books) -> None:
             status = "ok"
         bk = img2book.get(r["image"], "-")
         nfig = len(r.get("figures", []))
+        img = r["image"]
+        if r.get("dup_aliases"):  # byte-identical copies folded into this one (§20)
+            img += " (+" + ", ".join(r["dup_aliases"]) + ")"
         lines.append(
-            f"| {r['image']} | {r['type']} | {r.get('rotation', 0)} | {bk} "
+            f"| {img} | {r['type']} | {r.get('rotation', 0)} | {bk} "
             f"| {nfig or ''} | {status} |")
     (Path(out_dir) / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1981,6 +2029,18 @@ def cmd_batch(args):
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Fold byte-identical duplicate photos before the cache loop, so a dropped copy
+    # is never OCR'd and never reaches book_*.md (RAG stays single-hit). Recomputed
+    # from disk each run; touches no cache (§20).
+    images, dup_aliases = dedup_by_content(images)
+    (out_dir / "dedup.json").write_text(
+        json.dumps(dup_aliases, ensure_ascii=False, indent=2), encoding="utf-8")
+    if dup_aliases:
+        dropped = sum(len(v) for v in dup_aliases.values())
+        print(f"Content dedup: {dropped} byte-identical duplicate(s) folded into "
+              f"{len(dup_aliases)} canonical image(s); see {out_dir}/dedup.json",
+              file=sys.stderr)
+
     ris_files = sorted(in_dir.glob("*.ris"))
     ris = load_ris(ris_files[0]) if ris_files else None
     if ris:
@@ -2020,6 +2080,7 @@ def cmd_batch(args):
                       f"{cached['cover_title'] or '—'})", file=sys.stderr)
             else:
                 print(f"[{i}/{n}] {img.stem} → {cached['type']} (cached)", file=sys.stderr)
+            cached["dup_aliases"] = dup_aliases.get(img.name)  # in-memory only (§20)
             records.append(cached)
             continue
         if model is None:  # lazy-load once, only when there's work to do
@@ -2047,6 +2108,7 @@ def cmd_batch(args):
             mx.clear_cache()
         elapsed = time.perf_counter() - t0
         peak_gb = mx.get_peak_memory() / 1024**3
+        rec["dup_aliases"] = dup_aliases.get(img.name)  # in-memory only (§20)
         records.append(rec)
         processed += 1
         # Refresh all outputs so out/ fills incrementally and the run is auditable

@@ -56,6 +56,15 @@ and drops handwritten annotations.
   text heuristic (`_cover_title`) still runs — so don't "fix" the empty case by grabbing
   the next-largest text box (that just resurfaces the author). Tune the selection against
   `batch` cover output, never by editing a second model path.
+- **Content dedup runs automatically at `batch` discovery** (`dedup_by_content`,
+  `specs/020-content-dedup/`): byte-identical photos (a camera-roll copy like
+  `IMG_5097 (1).jpeg` == `IMG_5097.jpeg`) are folded to one canonical file (the clean name)
+  before the cache loop, so a duplicate is neither re-OCR'd nor a double hit in RAG. Identity
+  is `sha256` of the bytes, **never** the filename — a name-twin with *different* bytes
+  (`IMG_4867`: a roll that flipped a `(1)` onto a different shot) is kept and processed. The
+  fold map is written to `out/dedup.json` and shown in `index.md`; dedup touches no cache. Not a
+  hint file — there's nothing to maintain. Distinct from the `merges.txt` book-merge (§13),
+  which folds *different photos of the same book*.
 - `IMG_3020` is the diagnostic page: a high score there means handwriting is being
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies

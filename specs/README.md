@@ -46,6 +46,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 017 | [RAG CLI (index · search · get-page · eval)](017-rag-cli/spec.md) | Delivered | `0558341`, `29e81dd`, `56ef31e` | §12.7, §12.9 |
 | 018 | [RAG MCP server + integration bundle](018-rag-mcp-integration/spec.md) | Delivered | `061d04f` | §12.7 |
 | 019 | [Title/imprint detection gaps](019-title-imprint-gaps/spec.md) | Gap A done · Gap B proposed | `5f90a77` | §18 |
+| 020 | [Content-checksum image dedup](020-content-dedup/spec.md) | Delivered | — | — |
 
 **Negative results & deferred work** live as lighter cards in
 [`specs/experiments/`](experiments/README.md) — features we tried and rejected/removed,
