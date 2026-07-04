@@ -68,6 +68,10 @@ python ocr.py batch                 # OCR in/ → out/, grouped per book
 uses the default model `mlx-community/dots.mocr-4bit`, runs offline, and is **resumable** —
 re-run the same command if it's interrupted and it picks up where it left off.
 
+Byte-identical duplicate photos (a camera-roll copy like `IMG_5097 (1).jpeg` == `IMG_5097.jpeg`)
+are folded to one file up front by `sha256`, so a page is never OCR'd twice or double-counted in
+RAG — but a name-twin with *different* bytes is kept (fold map in `out/dedup.json`; see spec 020).
+
 What it does per image, in brief (each step is a feature spec — see **Design & docs**):
 
 1. **Downscale + orientation auto-correct** — read upright; if a shot is sideways, cheap
