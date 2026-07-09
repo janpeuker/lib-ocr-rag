@@ -144,6 +144,55 @@ python rag.py get-page IMG_3557 --neighbors 1   # the page ± 1 neighbour, in fu
 
 Paths resolve against the `rag.py` install, not your shell's cwd, so these work from anywhere.
 
+### Just the CLI — no Skill, no LLM
+
+You don't need Claude or any harness to use the index: `search` and `get-page` print
+readable text to your terminal by default (the `--json` above is only for machine callers).
+It's a normal command-line search over your own books.
+
+```bash
+source .venv/bin/activate
+
+# Find passages — ranked hits, each with a relevance score, a citation, and a snippet:
+python rag.py search "sea nomads and statelessness"
+#   query: "sea nomads and statelessness"  ·  mode=hybrid  backend=numpy
+#
+#   1. [0.812] Author, Title (2019) · IMG_3557 p.42
+#      …the Bajau move between reefs without ever claiming an island as home…
+
+# Narrow to one book (substring match on its title/slug), tune result count and channel:
+python rag.py search "enemies of all mankind" -k 3 --book pirates --mode lexical
+
+# Read a whole page (± neighbours) once a hit looks right — full text, no truncation:
+python rag.py get-page IMG_3557 --neighbors 1
+```
+
+`search` modes: `hybrid` (default, dense + lexical fused), `dense` (embedding similarity —
+fuzzy concepts), `lexical` (FTS5 keyword — exact names/terms). Add `--book <substr>` to scope
+to a title, `-k N` to change how many hits come back. `get-page IMG_x` dumps the page text so
+you can copy a quote straight out; the JSON form carries an `image_path` back to the source
+photo if you want to eyeball the original.
+
+### Re-indexing after new OCR
+
+`out/rag.db` is built from the `out/book_*.md` files, so it goes stale whenever you OCR more
+pages. Rebuilding it is always the **same one command** — run it again:
+
+```bash
+source .venv/bin/activate
+python rag.py index          # re-chunk + re-embed only new/changed pages, then you're current
+```
+
+It's cache-aware and resumable: unchanged pages are skipped, so a re-index after adding a
+handful of photos is quick. Reach for a flag only in the exceptions:
+
+- `python rag.py index --force` — ignore the cache and re-embed **everything** (use after
+  changing `--embed-model`, or if the DB looks corrupt).
+- `python rag.py index --no-embed` — re-chunk only, skip embedding (lexical search still
+  works; dense/hybrid won't reflect the new pages until you embed).
+
+There's no separate "update" step — `index` *is* both the first build and every refresh.
+
 ### Use it from another Claude project (`integration/`)
 
 Import one of two independent bundles in [`integration/`](integration/) — both talk to the
