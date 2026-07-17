@@ -36,7 +36,7 @@ run, version, and break one without touching the other. The contract between the
 
 | Constraint | Consequence in the code |
 |---|---|
-| **100% offline, no APIs** | Models download once from HuggingFace, then run under `HF_HUB_OFFLINE=1`. No cloud SDKs, no network at inference time. |
+| **100% offline, no APIs** | Models download once from HuggingFace, then run under `HF_HUB_OFFLINE=1` — the **default both tools set at import time** (`setdefault`, spec 021), so every subcommand and the Skill/MCP paths are offline with no env setup; an explicit `HF_HUB_OFFLINE=0` allows an intentional new-model download. No cloud SDKs, no network at inference time. |
 | **Apple Silicon, no CUDA** | Engine is `mlx-vlm` (MLX/Metal). `torch` is present *only* because the Qwen2-VL processor imports it — CPU/MPS wheels. |
 | **16 GB unified memory (M3)** | Image downscaling, 4-bit quantized models, single model instance reused across a batch, brute-force vector math instead of a heavyweight index. |
 | **Bare-bones, minimal deps** | No web framework, no config system, no vector DB. SQLite + numpy do the retrieval. Two single-file tools. |
@@ -145,7 +145,9 @@ cache. This is also the re-index path for `rag.py` (chunking keys off `content_s
 
 A thin `run_overnight.sh` wraps `batch` then `rag.py index` under `caffeinate`, retrying
 each stage (each retry resumes from cache) — long unattended runs survive sleep and
-transient crashes.
+transient crashes. Its interactive sibling `library.sh` (spec 021) is the everyday
+entrypoint: venv + offline + subcommand dispatch (`update` = batch + index, `search`,
+`page`, raw `ocr`/`rag` passthrough), with none of the overnight machinery.
 
 ### 2.6 One vendored workaround — the detokenizer UTF-8 patch
 
@@ -308,7 +310,8 @@ prompts.py              the one instruction prompt (+ PROMPT_VERSION, LAYOUT_PRO
 rag.py                  chunker + catalog + hybrid search + MCP serve (single file)
 requirements.txt        mlx-vlm engine (+ torch/torchvision the processor imports)
 requirements-rag.txt    rag-only deps (sentence-transformers, numpy)
-run_overnight.sh        caffeinated, retrying batch→index wrapper
+run_overnight.sh        caffeinated, retrying batch→index wrapper (long unattended runs)
+library.sh              everyday wrapper: venv + offline + update/search/page dispatch
 integration/            portable Skill + MCP bundle for *other* projects
 test/                   eval fixtures (*.jpeg + *_text.txt) — reused, not added to
 out/                    book_*.md/.txt, cache/, report.md, index.md, rag.db, *.log

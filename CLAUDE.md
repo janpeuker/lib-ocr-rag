@@ -132,6 +132,9 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
 - **Always ask before committing.** Never `git commit` (or push) without explicit
   per-commit approval.
 - **Always activate the venv** before running anything (`source .venv/bin/activate`)
-  so the already-downloaded, offline model is used. Run inference with
-  `HF_HUB_OFFLINE=1`; the `dots.mocr-4bit` model is already cached locally (~3.3 GB) —
-  never re-download it.
+  so the already-downloaded, offline model is used — or use `./library.sh`, which does
+  venv + offline + dispatch in one (`update` = batch + index; `search`/`page`; `ocr`/`rag`
+  passthrough; spec 021). Both tools set `HF_HUB_OFFLINE=1` themselves at import time
+  (`setdefault` — an explicit `HF_HUB_OFFLINE=0` wins, needed only to download a *new*
+  model); the `dots.mocr-4bit` model is already cached locally (~3.3 GB) — never
+  re-download it.

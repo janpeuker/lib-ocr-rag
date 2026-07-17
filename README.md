@@ -30,14 +30,29 @@ The OCR engine is `mlx-vlm` (mlx, transformers, pillow, numpy). It also pulls
 eagerly builds the Qwen2-VL *processor*, which imports them. Apple-Silicon CPU/MPS wheels,
 **no CUDA**.
 
-The first run downloads the model into the HuggingFace cache (~2 GB). After that, keep
-everything offline:
+The first run downloads the model into the HuggingFace cache (~2 GB). After that everything
+is offline **by default** — both tools set `HF_HUB_OFFLINE=1` themselves, so nothing to
+remember. To intentionally download a *new* model (`--model` / `--embed-model`), allow the
+network for that one run:
 
 ```bash
-export HF_HUB_OFFLINE=1
+HF_HUB_OFFLINE=0 python rag.py index --embed-model some/other-model
 ```
 
-(`ocr.py batch` and `rag.py` set this themselves, so the common paths need no extra setup.)
+### The easy way — `./library.sh`
+
+A tiny wrapper applies every setting (repo dir, venv, offline) so the `source .venv/…`
+lines below can be skipped entirely:
+
+```bash
+./library.sh update              # OCR new photos in in/, then refresh the search index
+./library.sh search "sea nomads and statelessness" -k 3
+./library.sh page IMG_3557 --neighbors 1
+./library.sh ocr run in/IMG_x.jpeg      # raw passthrough to ocr.py / rag.py
+```
+
+The bare `python ocr.py` / `python rag.py` commands below remain the canonical interface
+(and what the wrapper calls); for multi-hour resilient batches use `run_overnight.sh`.
 
 ---
 
@@ -192,6 +207,7 @@ handful of photos is quick. Reach for a flag only in the exceptions:
   works; dense/hybrid won't reflect the new pages until you embed).
 
 There's no separate "update" step — `index` *is* both the first build and every refresh.
+(`./library.sh update` chains `ocr.py batch` + `rag.py index` when new photos landed too.)
 
 ### Use it from another Claude project (`integration/`)
 

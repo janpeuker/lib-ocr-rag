@@ -10,7 +10,8 @@ Usage:
     python ocr.py batch [DIR] [--model NAME] [--out DIR] [--force]
     python ocr.py eval [--models a,b,c] [--max-edge 1600,1280,1024]
 
-100% offline after the first model download. Set HF_HUB_OFFLINE=1 to enforce.
+100% offline after the first model download; HF_HUB_OFFLINE=1 is the default
+(set HF_HUB_OFFLINE=0 explicitly to allow a new model download).
 """
 
 import argparse
@@ -25,6 +26,12 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Offline by default (spec 021): the model is cached locally, and an allowed
+# network path can fail spuriously (stale HF token ⇒ 401 masquerading as a
+# missing repo). Must precede any HuggingFace-consuming import; an explicit
+# HF_HUB_OFFLINE in the environment wins (needed to download a new --model).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from PIL import Image, ImageOps, ExifTags
 
@@ -2016,9 +2023,6 @@ def emit_all(out_dir, records, ris=None, merges=None, titles=None) -> list:
 
 
 def cmd_batch(args):
-    # The model is already cached locally; enforce no per-image network fetches
-    # (otherwise HF-hub "checking" noise looks like a re-download every image).
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
     import mlx.core as mx  # for per-image Metal buffer-cache release (see loop below)
 
     in_dir = Path(args.dir)

@@ -13,16 +13,26 @@ the `vec` column is left NULL until step 2.
 Usage:
     python rag.py index [--src out] [--db out/rag.db] [--force] [--show N]
 
-100% offline; step 1 touches no model and no network.
+100% offline after the first embed-model download; HF_HUB_OFFLINE=1 is the
+default (set HF_HUB_OFFLINE=0 explicitly to allow a new model download).
 """
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
 from pathlib import Path
+
+# Offline by default (spec 021): bge-small is cached locally, and an allowed
+# network path can fail spuriously — sentence-transformers probes the Hub for a
+# PEFT adapter_config.json even for cached models, and a stale HF token turns
+# that probe into a 401 reported as RepositoryNotFoundError. Must precede the
+# (lazy) sentence_transformers import; an explicit HF_HUB_OFFLINE in the
+# environment wins (needed to download a new --embed-model).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 DEFAULT_SRC = "out"
 DB_NAME = "rag.db"
