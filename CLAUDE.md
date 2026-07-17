@@ -19,7 +19,8 @@ and drops handwritten annotations.
 - **Bare-bones, minimal dependencies.** Engine is `mlx-vlm`; `torch`/`torchvision`
   are present only because the transformers Qwen2-VL processor imports them
   (Apple-Silicon CPU/MPS wheels, still no CUDA). Don't add web frameworks, config
-  systems, or cloud deps.
+  systems, or cloud deps. Dependencies are declared in `pyproject.toml` and managed
+  with `uv` (`uv sync` builds `.venv` from `uv.lock`; `uv lock --upgrade` to bump).
 - Target machine: Mac M3, 16 GB unified memory.
 
 ## Conventions
@@ -69,7 +70,7 @@ and drops handwritten annotations.
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies
   `_patch_detokenizer_utf8()`, which works around a strict-UTF-8 decode bug in
-  `mlx-vlm==0.6.3`'s `BPEStreamingDetokenizer.add_token` (a stray byte mid-word, e.g.
+  `mlx-vlm`'s (0.6.x, still unfixed as of 0.6.5) `BPEStreamingDetokenizer.add_token` (a stray byte mid-word, e.g.
   `controvert`, would otherwise crash the whole page/batch). When bumping `mlx-vlm`: check
   if upstream fixed `add_token` and **delete the patch if so**; regression-test with
   `python ocr.py run in/IMG_5906.jpeg` (must produce text, not raise). Full rationale and
@@ -77,7 +78,8 @@ and drops handwritten annotations.
 
 ## Local RAG (`rag.py`)
 
-A second, separate tool (deps in `requirements-rag.txt`, not `requirements.txt`):
+A second, separate tool (its deps — `sentence-transformers`, `mcp` — ship in the
+same `pyproject.toml`/`uv sync` as the OCR tool):
 offline hybrid retrieval over the `out/book_*.md` the OCR tool produces, so Claude
 can look up citations without loading whole books. See `specs/016-rag-retrieval-engine/`
 (engine), `specs/017-rag-cli/` (CLI), and `specs/018-rag-mcp-integration/` (MCP/Skill).
@@ -131,7 +133,8 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
 - **Main-only development** — work directly on `main`, do not create feature branches.
 - **Always ask before committing.** Never `git commit` (or push) without explicit
   per-commit approval.
-- **Always activate the venv** before running anything (`source .venv/bin/activate`)
+- **Always activate the venv** before running anything (`source .venv/bin/activate`;
+  it's uv-managed — recreate/repair with `uv sync`, never `pip install`)
   so the already-downloaded, offline model is used — or use `./library.sh`, which does
   venv + offline + dispatch in one (`update` = batch + index; `search`/`page`; `ocr`/`rag`
   passthrough; spec 021). Both tools set `HF_HUB_OFFLINE=1` themselves at import time

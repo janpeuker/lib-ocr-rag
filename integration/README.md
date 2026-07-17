@@ -39,7 +39,7 @@ about <topic>?".
 
 Registers `rag.py serve` as an MCP server exposing `search_library` and `get_page`
 tools. Useful if you prefer a registered tool over a shell-out. Requires the `mcp`
-package in this install (already added via `requirements-rag.txt`).
+package in this install (already included in the `pyproject.toml` / `uv sync`).
 
 **Import — either** merge `mcp/library-search.mcp.json` into the target project's
 `.mcp.json`, **or** register it with one command:

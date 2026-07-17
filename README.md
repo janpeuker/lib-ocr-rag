@@ -19,10 +19,12 @@ Two single-file tools, decoupled — `rag.py` only ever reads what `ocr.py` writ
 
 ## Install
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` +
+`uv.lock`; both the OCR engine and the RAG search layer install together):
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # OCR engine (mlx-vlm)
-pip install -r requirements-rag.txt      # only if you want the RAG search layer
+uv sync                      # creates .venv and installs everything, pinned by uv.lock
+source .venv/bin/activate    # or prefix commands with `uv run`
 ```
 
 The OCR engine is `mlx-vlm` (mlx, transformers, pillow, numpy). It also pulls

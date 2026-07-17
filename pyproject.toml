@@ -1,0 +1,32 @@
+# uv-managed project (https://docs.astral.sh/uv/): `uv sync` creates .venv and
+# installs everything below; exact versions are pinned in uv.lock. Consolidates
+# the former requirements.txt (OCR) + requirements-rag.txt (RAG) into one file.
+# No [build-system] on purpose — this is a flat script repo (ocr.py / rag.py),
+# not an installable package, so uv treats it as a virtual project.
+
+[project]
+name = "lib-ocr-rag"
+version = "0.1.0"
+description = "Offline book-page OCR (mlx-vlm on Apple Silicon) + local hybrid RAG over the output"
+requires-python = ">=3.12"
+dependencies = [
+    # --- OCR tool (ocr.py) — offline at inference time after the first model download.
+    # mlx-vlm is the engine; it pulls in mlx, transformers, pillow, numpy.
+    # Pinned to the 0.6 series: load_model() vendors a monkeypatch for its
+    # BPEStreamingDetokenizer (see _patch_detokenizer_utf8 in ocr.py and
+    # specs/015-resumability-resilience/) — revisit the patch on every bump.
+    "mlx-vlm>=0.6.5,<0.7",
+    # Required by the dots/Qwen-family HuggingFace *processor* (transformers 5.x
+    # eagerly instantiates a Qwen2-VL video processor that needs these). The model
+    # itself runs on MLX/Metal — these are Apple-Silicon CPU/MPS wheels, NO CUDA.
+    "torch>=2.13",
+    "torchvision>=0.28",
+    # --- RAG tool (rag.py) — offline at query time after the first model download.
+    # Dense embeddings on Apple-Silicon MPS; the default model BAAI/bge-small-en-v1.5
+    # (~130 MB) downloads once, then HF_HUB_OFFLINE=1 applies.
+    "sentence-transformers>=5.6",
+    # MCP server (optional `rag.py serve`; the CLI/Skill path needs none of this).
+    "mcp>=1.28",
+    # Optional vector backends (faiss-cpu, duckdb) stay uninstalled: lazy-imported,
+    # only needed if selected via --backend.
+]
