@@ -43,6 +43,9 @@ resort, force a specific title when even the bibliography can't supply it.
 - **FR-004** All hint files (`*.ris`, `titles.txt`, and the feature 013 `merges.txt`) MUST
   honour the no-op-if-absent contract (Principle VIII): absent ⇒ no-op; output-only; they MUST
   NEVER touch the cache, change grouping decisions, or affect `PROMPT_VERSION`.
+- **FR-005** An RIS record whose creators are editors (`A3`/`A2`/`ED` tags, no `AU`/`A1`)
+  MUST still fill the author field, credited as editor(s): `Orford, Anne (ed.)` /
+  `Darian-Smith, Eve; Fitzpatrick, Peter (eds.)`.
 
 ### Key entities
 - **RIS record** — parsed bibliographic entry `{ title, author, publisher, year, isbn, city }`.
@@ -65,3 +68,8 @@ resort, force a specific title when even the bibliography can't supply it.
   `IMG_5922 = Singapore: A Modern History`).
 - This story shares the exact no-op-if-absent contract with the feature 013 `merges.txt`
   duplicate-merge allow-list — three optional `in/` files, all output-only.
+- **Editor credit (FR-005, Jul 2026):** Zotero exports an edited volume's editors as `A3`
+  (no `AU`), so `load_ris` previously dropped them and the book showed an empty author.
+  Editors now fill the author field with an "(ed.)"/"(eds.)" suffix — factually right for
+  edited volumes (Orford's *International Law and its Others*, Darian-Smith & Fitzpatrick's
+  *Laws of the Postcolonial*) and reversible in Zotero, not here, if a record is miscast.

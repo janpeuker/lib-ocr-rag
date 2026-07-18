@@ -1050,6 +1050,13 @@ def call_number(rec) -> str:
     return re.sub(r"\s+", "", m.group(1)) if m else ""
 
 
+def _meta_isbn(rec) -> str:
+    """Digits-only ISBN parsed off a meta shot's metadata block, or "". Hyphenation
+    varies between CIP blocks and barcodes, so ISBNs compare as bare digits."""
+    m = re.search(r"(?im)^\s*isbn:\s*(.+)$", rec.get("metadata", ""))
+    return re.sub(r"[^0-9Xx]", "", m.group(1)) if m else ""
+
+
 def _page_reset(prev, rec) -> bool:
     """The page numbering restarts — a new book/section begins. Either the folio
     drops (rec starts below where prev ended) or it returns to the front matter."""
@@ -1075,7 +1082,7 @@ def _session_gap(prev, rec) -> bool:
 def _new_book(hdr: str, anchored: bool, call: str = "", session_start: bool = False) -> dict:
     return {"records": [], "metadata": [], "has_body": False, "identity": hdr or "",
             "anchored": anchored, "headers": [], "call": call,
-            "session_start": session_start, "key_images": []}
+            "session_start": session_start, "key_images": [], "isbns": set()}
 
 
 def _capture_order(records):
@@ -1121,6 +1128,10 @@ def group_images(records, merges=None):
             start = True         # `! IMG_x` split hint — overrides every keep rule (024)
         elif is_meta and hdr and cur["identity"] and not _hdr_match(hdr, cur["identity"]):
             start = True                                   # rule 1: new cover/imprint title
+        elif (is_meta and r.get("type") == "IMPRINT" and cur["has_body"]
+                and _meta_isbn(r) and _meta_isbn(r) not in cur["isbns"]):
+            start = True    # rule 1b: an imprint bearing a foreign ISBN — even with no
+            #                 parsable title, it is front matter of a NEW book (spec 025)
         elif hdr and cur["identity"] and _hdr_match(hdr, cur["identity"]):
             start = False                                  # same title → keep (overrides gap)
         elif call and cur["call"] and call != cur["call"]:
@@ -1143,6 +1154,9 @@ def group_images(records, merges=None):
             cur["call"] = call
         if is_meta:
             cur["metadata"].append(r)
+            isbn = _meta_isbn(r)
+            if isbn:
+                cur["isbns"].add(isbn)                     # own ISBNs never split (025)
             if hdr and not cur["anchored"]:
                 cur["identity"], cur["anchored"] = hdr, True
         else:
@@ -1730,6 +1744,7 @@ def load_ris(path) -> list:
                 "type": (r.get("TY") or [""])[0],
                 "title": ti,
                 "authors": r.get("AU") or r.get("A1") or [],
+                "editors": r.get("A3") or r.get("A2") or r.get("ED") or [],
                 "year": (r.get("PY") or r.get("Y1") or [""])[0][:4],
                 "publisher": (r.get("PB") or [""])[0],
                 "isbn": (r.get("SN") or [""])[0],
@@ -1771,7 +1786,7 @@ def match_ris(book, ris):
         return None
     best, best_score = None, 0.0
     for r in ris:
-        if r["type"] not in ("BOOK", "CHAP"):
+        if r["type"] not in ("BOOK", "CHAP", "EDBOOK"):
             continue
         rmain = _norm_title(_main_title(r["title"]))
         if len(rmain) < 6:
@@ -1795,6 +1810,9 @@ def book_record(book, ris):
         fields = {}
         if m["authors"]:
             fields["author"] = "; ".join(m["authors"])
+        elif m["editors"]:      # an edited volume: credit the editors as such (FR-005)
+            fields["author"] = ("; ".join(m["editors"])
+                                + (" (eds.)" if len(m["editors"]) > 1 else " (ed.)"))
         for k in ("publisher", "year", "isbn", "city"):
             if m[k]:
                 fields[k] = m[k]

@@ -51,6 +51,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 022 | [Capture-order grouping](022-capture-order-grouping/spec.md) | Delivered | — | — |
 | 023 | [Prompt-echo guard](023-prompt-echo-guard/spec.md) | Delivered | — | — |
 | 024 | [Book-split hint (`! IMG_x`)](024-book-split-hint/spec.md) | Delivered | — | — |
+| 025 | [Imprint-ISBN book boundary](025-imprint-isbn-split/spec.md) | Delivered | — | — |
 
 **Negative results & deferred work** live as lighter cards in
 [`specs/experiments/`](experiments/README.md) — features we tried and rejected/removed,
