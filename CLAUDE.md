@@ -36,7 +36,9 @@ and drops handwritten annotations.
   real duplicates here are often *title-invisible*, so the reliable path is the
   optional `in/merges.txt` allow-list (read by `ocr.py batch`, like the `*.ris` hint;
   absent ⇒ no-op, never touches the cache). `IMG_a + IMG_b` folds whole books;
-  `IMG_host += IMG_x` moves a stray shot. `out/merge_candidates.json` is a ranked
+  `IMG_host += IMG_x` moves a stray shot; `! IMG_x` forces a new book to *start* at that
+  shot — the inverse split, for a coverless book opening mid-session with no automatic
+  boundary signal (spec 024). `out/merge_candidates.json` is a ranked
   discovery aid for populating it. Re-run `python rag.py index` after to refresh the
   catalog. Rationale + the validated fixture in `specs/013-duplicate-merge/`.
 - **Title overrides** (`in/titles.txt`, optional, same no-op-if-absent contract as

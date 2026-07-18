@@ -872,6 +872,7 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
                 quality = text_quality(hi_text)
         typ = detect_type(text, img_path=str(img_path))
         role = "meta" if typ in ("COVER", "IMPRINT") else "body"
+        echo = _is_prompt_echo(text)  # spec 023: parroted instructions ≠ page text
         # Largest-font cover title: COVER shots pay one layout+text pass so the title
         # is the biggest type on the page, not whatever line OCR'd first (§16). The
         # chosen-orientation image is still on disk in `td`.
@@ -900,12 +901,12 @@ def process_image(model, processor, config, img_path, out_dir, model_name):
         "pass_stats": stats,       # chosen pass cost: prefill/decode tokens, tps, finish_reason
         "role": role,
         "figures": figures,        # caption lines flagged as figures/maps (may be [])
-        "raw_md": text if role == "body" else "",
+        "raw_md": text if role == "body" and not echo else "",
         "ocr_text": text,  # always kept (debug / cover-title fallback)
         "cover_title": cover_title,  # largest-font Title on a COVER ("" otherwise/none)
         "metadata": parse_metadata(typ, text, cover_title) if role == "meta" else "",
-        "running_header": running_header(text) if role == "body" else "",
-        "page_numbers": page_numbers(text) if role == "body" else [],
+        "running_header": running_header(text) if role == "body" and not echo else "",
+        "page_numbers": page_numbers(text) if role == "body" and not echo else [],
         "datetime": exif["datetime"].isoformat() if exif["datetime"] else None,
         "gps": list(exif["gps"]) if exif["gps"] else None,
         "model": model_name,
@@ -935,6 +936,18 @@ def backfill_cover_title(model, processor, config, img_path, out_dir, rec, model
 
 
 # --- per-book grouping (no inference) -------------------------------------- #
+# Prompt-echo guard (spec 023): on a near-textless shot (a book spine, a blank
+# verso) the model's failure mode is to parrot its own instructions back as the
+# "transcription". Markers are derived from the live prompt so they track edits.
+_PROMPT_ECHO_MARKERS = [ln for ln in PROMPT.splitlines() if len(ln) >= 40]
+
+
+def _is_prompt_echo(text: str) -> bool:
+    """True when a read contains a full instruction line of the OCR prompt —
+    never valid page text (topical overlap can't reproduce a ≥40-char line)."""
+    return any(m in text for m in _PROMPT_ECHO_MARKERS)
+
+
 def _parse_dt(s):
     return datetime.datetime.fromisoformat(s) if s else None
 
@@ -1065,6 +1078,20 @@ def _new_book(hdr: str, anchored: bool, call: str = "", session_start: bool = Fa
             "session_start": session_start, "key_images": []}
 
 
+def _capture_order(records):
+    """Records in capture order (spec 022): EXIF time primary, original
+    (filename) order as tiebreak. An EXIF-less shot inherits its predecessor's
+    time so it stays next to its filename neighbours; with no EXIF anywhere the
+    order degrades to plain filename order. Filename order alone breaks on
+    name-twin rolls from different sittings — `a (1), a, b (1), b, …` alternates
+    between sittings and trips the session fence on every step."""
+    keyed, last = [], datetime.datetime.min
+    for i, r in enumerate(records):
+        last = _parse_dt(r.get("datetime")) or last
+        keyed.append((last, i))
+    return [records[i] for _, i in sorted(keyed)]
+
+
 def group_images(records, merges=None):
     """Segment the shots (in capture order) into per-book runs, then merge runs
     that share a title. Driven by title identity, not by time/GPS fences:
@@ -1079,7 +1106,8 @@ def group_images(records, merges=None):
     Because a book's title can first appear several pages in (a headerless opening
     page, then the running header), a final pass merges adjacent runs whose header
     sets overlap — this rejoins one book shot across separate sessions/days."""
-    recs = [r for r in records if r.get("role") != "skip"]
+    recs = _capture_order([r for r in records if r.get("role") != "skip"])
+    splits = merges[2] if merges else set()   # human boundary hints (spec 024)
     books, cur, prev = [], None, None
     for r in recs:
         hdr = page_header(r)
@@ -1089,6 +1117,8 @@ def group_images(records, merges=None):
         sess = prev is not None and _session_gap(prev, r)
         if cur is None:
             start = True
+        elif Path(r["image"]).stem in splits:
+            start = True         # `! IMG_x` split hint — overrides every keep rule (024)
         elif is_meta and hdr and cur["identity"] and not _hdr_match(hdr, cur["identity"]):
             start = True                                   # rule 1: new cover/imprint title
         elif hdr and cur["identity"] and _hdr_match(hdr, cur["identity"]):
@@ -1121,10 +1151,10 @@ def group_images(records, merges=None):
                 cur["identity"] = hdr
         prev = r
     books = _infer_key_image_titles(
-        _fold_orphan_covers(_fold_key_images(_merge_shared_title(books))))
+        _fold_orphan_covers(_fold_key_images(_merge_shared_title(books, splits))))
     books = _merge_library_duplicates(books)          # safe auto Tier 1 + Tier 2
     if merges:                                        # human-confirmed allow-list
-        groups, moves = merges
+        groups, moves, _ = merges           # splits were applied during segmentation
         books = _apply_manual_merges(books, groups, moves)
     return books
 
@@ -1322,15 +1352,18 @@ def _infer_key_image_titles(books):
     return books
 
 
-def _merge_shared_title(books):
+def _merge_shared_title(books, splits=frozenset()):
     """Fold an adjacent run into the previous book when their title-header sets
     overlap (fuzzy). Rejoins e.g. a book shot on two different days whose later
-    session opens on a headerless page before the running title reappears."""
+    session opens on a headerless page before the running title reappears.
+    A run opening on a `! IMG_x` split stem is never folded — the human boundary
+    outranks the fuzzy header match (spec 024, FR-002)."""
     merged = []
     for b in books:
         prev = merged[-1] if merged else None
         call_conflict = prev and prev["call"] and b["call"] and prev["call"] != b["call"]
-        if prev and not b["anchored"] and not call_conflict and any(
+        is_split = b["records"] and Path(b["records"][0]["image"]).stem in splits
+        if prev and not b["anchored"] and not call_conflict and not is_split and any(
                 _hdr_match(h, p) for h in b["headers"] for p in prev["headers"]):
             prev["records"] += b["records"]
             prev["metadata"] += b["metadata"]
@@ -1476,22 +1509,29 @@ def merge_candidates(books):
 
 
 # --- manual allow-list (optional in/merges.txt; mirrors the RIS hint) ------- #
-# Two operators, one group per line ('#' comments, blanks ignored):
+# Three operators, one per line ('#' comments, blanks ignored):
 #   IMG_a + IMG_b [+ IMG_c]   fold the WHOLE books containing these shots into one
 #   IMG_host += IMG_x [IMG_y] MOVE individual shots into the host's book (for a
 #                             stray cover/page the grouper put in the wrong book)
+#   ! IMG_x                   SPLIT: force a new book to start at this shot (024)
 def load_merges(in_dir):
-    """Parse in/merges.txt -> (groups, moves). Absent file -> ([], []). Never
-    affects the cache or auto-grouping unless present."""
+    """Parse in/merges.txt -> (groups, moves, splits). Absent file -> ([], [], set()).
+    Never affects the cache or auto-grouping unless present. `! IMG_x` (spec 024)
+    forces a new book to start at that shot — the inverse of a merge, for a
+    coverless book opening mid-session where no automatic boundary signal exists."""
     p = Path(in_dir) / "merges.txt"
     if not p.exists():
-        return [], []
-    groups, moves = [], []
+        return [], [], set()
+    groups, moves, splits = [], [], set()
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
-        if "+=" in line:
+        if line.startswith("!"):
+            stem = line[1:].strip()
+            if stem:
+                splits.add(Path(stem).stem)
+        elif "+=" in line:
             host, rest = line.split("+=", 1)
             shots = [s for s in re.split(r"[+\s]+", rest) if s]
             host = host.strip()
@@ -1501,7 +1541,7 @@ def load_merges(in_dir):
             stems = [s.strip() for s in line.split("+") if s.strip()]
             if len(stems) >= 2:
                 groups.append(stems)
-    return groups, moves
+    return groups, moves, splits
 
 
 def load_titles(in_dir):
@@ -2001,8 +2041,11 @@ def emit_all(out_dir, records, ris=None, merges=None, titles=None) -> list:
     per-image index, and the top-level report. Pure over `records` and cheap, so
     it's safe to call after each image for incremental, visible output. `ris` is
     an optional parsed Zotero bibliography used to correct/complete metadata;
-    `merges` is the optional (groups, moves) allow-list from in/merges.txt;
+    `merges` is the optional (groups, moves, splits) allow-list from in/merges.txt;
     `titles` is the optional {stem: title} override map from in/titles.txt."""
+    for r in records:  # heal legacy prompt-echo caches in memory (spec 023, FR-003)
+        if r.get("role") == "body" and r.get("raw_md") and _is_prompt_echo(r["raw_md"]):
+            r["raw_md"], r["running_header"], r["page_numbers"] = "", "", []
     books = group_images(records, merges)
     if titles:
         for book in books:
@@ -2051,9 +2094,9 @@ def cmd_batch(args):
         print(f"Bibliography hint: {ris_files[0].name} ({len(ris)} entries)",
               file=sys.stderr)
     merges = load_merges(in_dir)
-    if merges[0] or merges[1]:
+    if merges[0] or merges[1] or merges[2]:
         print(f"Merge allow-list: merges.txt ({len(merges[0])} book-merges, "
-              f"{len(merges[1])} shot-moves)", file=sys.stderr)
+              f"{len(merges[1])} shot-moves, {len(merges[2])} splits)", file=sys.stderr)
     titles = load_titles(in_dir)
     if titles:
         print(f"Title overrides: titles.txt ({len(titles)} books)", file=sys.stderr)
