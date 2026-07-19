@@ -37,8 +37,10 @@ resort, force a specific title when even the bibliography can't supply it.
   matched (`match_ris`) to correct the title and complete author/publisher/year/ISBN/city;
   `book_record` MUST drive both `write_report` and per-book frontmatter; `_yaml_val` MUST
   quote colon-bearing titles.
-- **FR-002** RIS matching MUST compare only the main title (before any subtitle) at
-  ≥ 0.85 ratio or containment, and MUST skip generic titles.
+- **FR-002** RIS matching MUST compare the main title (before any subtitle) at
+  ≥ 0.85 ratio or containment, and MUST skip generic titles. (Spec 026 FR-001 adds a
+  parallel full-title comparison so a match survives OCR dropping the subtitle colon,
+  without relaxing this bar — the two comparisons are OR-ed by max.)
 - **FR-003** `in/titles.txt` MUST support `IMG_xxxx = Some Title` to force a book's title.
 - **FR-004** All hint files (`*.ris`, `titles.txt`, and the feature 013 `merges.txt`) MUST
   honour the no-op-if-absent contract (Principle VIII): absent ⇒ no-op; output-only; they MUST

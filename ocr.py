@@ -948,6 +948,21 @@ def _is_prompt_echo(text: str) -> bool:
     return any(m in text for m in _PROMPT_ECHO_MARKERS)
 
 
+def _is_runaway(text: str) -> bool:
+    """True when a body read is a degenerate repetition loop — the model stuck on one
+    line/phrase for the whole shot (e.g. a big cover title echoed hundreds of times).
+    Not page content; blanked at emit so it never reaches a book or the RAG index
+    (spec 026). Conservative: only ≥ 90 %-duplicate multi-line reads qualify."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 10:
+        return False
+    line_uniq = len(set(lines)) / len(lines)
+    toks = text.split()
+    tri = list(zip(toks, toks[1:], toks[2:]))
+    phrase_uniq = (len(set(tri)) / len(tri)) if len(tri) >= 30 else 1.0
+    return min(line_uniq, phrase_uniq) < 0.1
+
+
 def _parse_dt(s):
     return datetime.datetime.fromisoformat(s) if s else None
 
@@ -1687,7 +1702,7 @@ def book_title(book) -> str:
             c = mt.group(1).strip().strip("\"'") if mt else ""
             if not c or _folio(c):
                 c = _cover_title(m.get("ocr_text", ""))
-        if c and _norm_title(c) not in _GENERIC_TITLES:
+        if c and not _is_nontitle(c):
             # a running title repeated on many shots that disagrees means this "cover"
             # is a stray/UI shot — trust the book's own running title instead. But a
             # byline running header (e.g. the editors "Geoffrey Benjamin" printed as a
@@ -1702,15 +1717,18 @@ def book_title(book) -> str:
         mt = re.search(r"(?im)^\s*title:\s*(.+)$", m["metadata"])
         if mt:
             t = mt.group(1).strip().strip("\"'")
-            if t and not _folio(t):
+            if t and not _folio(t) and not _is_nontitle(t):
                 return t
     for m in book["metadata"]:
         t = _cip_title(m.get("ocr_text", ""))
-        if t:
+        if t and not _is_nontitle(t):
             return t
-    # 3. most frequent title-like running header among the book's shots (voting)
+    # 3. most frequent title-like running header among the book's shots (voting),
+    #    skipping CIP/copyright boilerplate a run of imprint shots can make the plurality
     if headers:
-        return top
+        for h, _ in Counter(headers).most_common():
+            if not _is_nontitle(h):
+                return h
     # 4. title inferred by exclusion from a shared spine/shelf key image
     if book.get("inferred_title"):
         return book["inferred_title"]
@@ -1772,29 +1790,50 @@ _GENERIC_TITLES = {
     "abstract", "summary", "abbreviations", "list of illustrations", "list of figures",
 }
 
+# Library Cataloguing-in-Publication / copyright boilerplate an imprint page prints in
+# lieu of (or beside) the title — never a book's real title, but it can OCR as the most
+# common running header and get picked as one (spec 026).
+_BOILERPLATE_TITLE = re.compile(
+    r"(?i)(catalogu(?:e|ing).{0,40}record|record for this book|"
+    r"available from the (?:british library|library of congress)|"
+    r"library of congress catalog(?:u|ing|ed)?)")
+
+
+def _is_nontitle(t: str) -> bool:
+    """A candidate that is a generic section word or a library CIP/copyright boilerplate
+    line — never a book's real title (feature 010 generic words + spec 026 boilerplate)."""
+    n = _norm_title(t)
+    return (not n) or n in _GENERIC_TITLES or bool(_BOILERPLATE_TITLE.search(t))
+
 
 def match_ris(book, ris):
-    """Best RIS book whose *main* title matches one of this book's title guesses.
-    Compares pre-colon main titles only, so a shared subtitle suffix (e.g. '… in the
-    Malay World') can't cause a false match. Returns the record or None."""
+    """Best RIS book whose title matches one of this book's title guesses. Compares
+    pre-colon *main* titles (so a shared subtitle suffix like '… in the Malay World'
+    can't cause a false match) AND the *full* titles (so a real match survives OCR
+    dropping the subtitle colon — a run-on 'Across Oceans of Law The Komagata Maru …'
+    still matches its colon-bearing RIS entry). Returns the record or None (spec 026)."""
     queries = [book.get("title_override", ""), book_title(book),
                book.get("identity", ""), book.get("inferred_title", "")]
-    qs = [_norm_title(_main_title(q)) for q in queries
-          if q and not q.startswith("Untitled (")]
-    qs = [q for q in qs if len(q) >= 6 and q not in _GENERIC_TITLES]
-    if not qs:
+    raw = [q for q in queries if q and not q.startswith("Untitled (")]
+    pairs = [(m, _norm_title(q)) for q in raw
+             if len(m := _norm_title(_main_title(q))) >= 6 and m not in _GENERIC_TITLES]
+    if not pairs:
         return None
+
+    def sim(q, t):  # containment (length-guarded) or fuzzy ratio; 0 if t too short
+        if len(t) < 6:
+            return 0.0
+        contained = ((q in t or t in q)
+                     and min(len(q), len(t)) >= 0.7 * max(len(q), len(t)))
+        return 0.99 if contained else difflib.SequenceMatcher(None, q, t).ratio()
+
     best, best_score = None, 0.0
     for r in ris:
         if r["type"] not in ("BOOK", "CHAP", "EDBOOK"):
             continue
-        rmain = _norm_title(_main_title(r["title"]))
-        if len(rmain) < 6:
-            continue
-        for q in qs:
-            contained = ((q in rmain or rmain in q)
-                         and min(len(q), len(rmain)) >= 0.7 * max(len(q), len(rmain)))
-            score = 0.99 if contained else difflib.SequenceMatcher(None, q, rmain).ratio()
+        rmain, rfull = _norm_title(_main_title(r["title"])), _norm_title(r["title"])
+        for qmain, qfull in pairs:
+            score = max(sim(qmain, rmain), sim(qfull, rfull))  # main↔main OR full↔full
             if score > best_score:
                 best, best_score = r, score
     return best if best_score >= 0.85 else None
@@ -2061,8 +2100,9 @@ def emit_all(out_dir, records, ris=None, merges=None, titles=None) -> list:
     an optional parsed Zotero bibliography used to correct/complete metadata;
     `merges` is the optional (groups, moves, splits) allow-list from in/merges.txt;
     `titles` is the optional {stem: title} override map from in/titles.txt."""
-    for r in records:  # heal legacy prompt-echo caches in memory (spec 023, FR-003)
-        if r.get("role") == "body" and r.get("raw_md") and _is_prompt_echo(r["raw_md"]):
+    for r in records:  # heal degenerate body caches in memory (spec 023 echo, 026 runaway)
+        if r.get("role") == "body" and r.get("raw_md") and (
+                _is_prompt_echo(r["raw_md"]) or _is_runaway(r["raw_md"])):
             r["raw_md"], r["running_header"], r["page_numbers"] = "", "", []
     books = group_images(records, merges)
     if titles:
