@@ -1862,6 +1862,33 @@ def book_record(book, ris):
     return book_title(book), book_meta(book), miss
 
 
+# --- body text stranded on a cover/imprint shot (spec 027) ----------------- #
+# A COVER/IMPRINT shot is classified `role: meta` and read only for bibliographic
+# fields, so its transcription never reaches a book file — and therefore never
+# reaches the RAG catalog. But a title-page verso or an imprint page often carries
+# real prose (a preface opening, an epigraph, the first page of chapter one). Below
+# this many characters the read is just the title/publisher block that
+# `parse_metadata` already consumed; above it, emit the text as a page section too.
+META_BODY_MIN_CHARS = 400
+META_BODY_MARKER = "_(text recovered from a cover/imprint shot)_"
+
+
+def recovered_body(rec) -> str:
+    """Prose stranded on a `role: meta` shot, or "" if there is none worth emitting.
+
+    Applies the same guards the body path applies at cache time (`_is_prompt_echo`,
+    `_is_runaway`) — those run only for `role == "body"`, so meta `ocr_text` is
+    unfiltered and must be checked here before it reaches a book file."""
+    if rec.get("role") != "meta":
+        return ""
+    text = (rec.get("ocr_text") or "").strip()
+    if len(text) < META_BODY_MIN_CHARS:
+        return ""
+    if _is_prompt_echo(text) or _is_runaway(text):
+        return ""
+    return text
+
+
 def write_book(out_dir, idx, book, ris=None) -> str:
     title, fields, note = book_record(book, ris)
     name = f"book_{idx:02d}_{_slugify(title)}"
@@ -1883,8 +1910,13 @@ def write_book(out_dir, idx, book, ris=None) -> str:
         parts.append("> _Other books visible in the cover/shelf photo:_\n\n"
                      "```yaml\n" + extra + "\n```\n")
     for r in book["records"]:
+        # The `## {image}` heading must stay a bare filename: rag.py's parse_book
+        # reads it as the image label, which feeds get-page and the image_path
+        # escape hatch. Any marker goes in the body, never in the heading.
         if r["role"] == "body" and r["raw_md"].strip():
             parts.append(f"## {r['image']}\n\n{r['raw_md']}\n")
+        elif recovered := recovered_body(r):
+            parts.append(f"## {r['image']}\n\n{META_BODY_MARKER}\n\n{recovered}\n")
     md = "\n".join(parts).strip() + "\n"
     (Path(out_dir) / f"{name}.md").write_text(md, encoding="utf-8")
     (Path(out_dir) / f"{name}.txt").write_text(md_to_text(md), encoding="utf-8")
@@ -1899,6 +1931,9 @@ def write_index(out_dir, records, books) -> None:
     for r in records:
         if r["role"] == "body" and not r["raw_md"].strip():
             status = "empty"
+        elif r["role"] == "meta" and recovered_body(r):
+            # No bibliographic fields, but its prose was recovered as a page (§27).
+            status = "ok" if r["metadata"].strip() else "recovered"
         elif r["role"] == "meta" and not r["metadata"].strip():
             status = "no-fields"
         else:

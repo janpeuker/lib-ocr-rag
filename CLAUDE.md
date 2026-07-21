@@ -68,6 +68,13 @@ and drops handwritten annotations.
   fold map is written to `out/dedup.json` and shown in `index.md`; dedup touches no cache. Not a
   hint file — there's nothing to maintain. Distinct from the `merges.txt` book-merge (§13),
   which folds *different photos of the same book*.
+- **Cover/imprint shots can carry real page text** (spec 027). A COVER/IMPRINT shot is
+  `role: meta` and read for bibliographic fields, but a title-page verso or imprint page
+  often holds prose too. `write_book` emits it as a normal page section when it clears
+  `META_BODY_MIN_CHARS` (re-applying the echo/runaway guards, which only run on the body
+  path). Emit-time only — it never touches the cache, so a re-`batch` recovers it with no
+  re-OCR. A page missing from search may be a **coverage hole, not a ranking bug**: check
+  it reached a `out/book_*.md` at all before tuning retrieval.
 - `IMG_3020` is the diagnostic page: a high score there means handwriting is being
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies

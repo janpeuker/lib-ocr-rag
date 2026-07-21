@@ -48,8 +48,8 @@ lines below can be skipped entirely:
 
 ```bash
 ./library.sh update              # OCR new photos in in/, then refresh the search index
-./library.sh search "sea nomads and statelessness" -k 3
-./library.sh page IMG_3557 --neighbors 1
+./library.sh search "trade guilds and civic power" -k 3
+./library.sh page IMG_1234 --neighbors 1
 ./library.sh ocr run in/IMG_x.jpeg      # raw passthrough to ocr.py / rag.py
 ```
 
@@ -125,7 +125,7 @@ All three only enrich output; grouping itself never depends on them.
 |------|------|
 | `report.md` | The human entry point — every book with metadata, capture span, GPS centroid ± radius (wide = possible mis-group), key-image provenance, and a linked list of its page shots. Rewritten live as the run proceeds. |
 | `book_NN_<slug>.md` / `.txt` | One document per book: YAML metadata header + its pages. |
-| `index.md` | One row per image — type, rotation, assigned book, figure count, status (`ok` / `empty` / `no-fields`). Use it to audit grouping. |
+| `index.md` | One row per image — type, rotation, assigned book, figure count, status (`ok` / `empty` / `no-fields` / `recovered`). Use it to audit grouping. |
 | `instrument.jsonl` | One JSON line per image with cost + quality signals; append-only, survives resumes. An avg-per-image summary prints on stderr at the end. |
 
 Progress is one structured line per image on stderr —
@@ -145,9 +145,9 @@ channel and fuses them, so an approximate author *and* a fuzzy concept both work
 ```bash
 source .venv/bin/activate
 python rag.py index                          # chunk + embed out/book_*.md → out/rag.db
-python rag.py search "where do sea nomads identify with the sea, not an island"
-python rag.py search "Heller-Roazen on pirates as enemies of all mankind" -k 3
-python rag.py get-page IMG_3557 --neighbors 1   # the page ± 1 neighbour, in full
+python rag.py search "where does the author tie identity to a trade rather than a place"
+python rag.py search "the limits of sovereign immunity" -k 3
+python rag.py get-page IMG_1234 --neighbors 1   # the page ± 1 neighbour, in full
 ```
 
 - `index` is resumable and cache-aware — re-run it after new OCR and it re-embeds only
@@ -171,17 +171,17 @@ It's a normal command-line search over your own books.
 source .venv/bin/activate
 
 # Find passages — ranked hits, each with a relevance score, a citation, and a snippet:
-python rag.py search "sea nomads and statelessness"
-#   query: "sea nomads and statelessness"  ·  mode=hybrid  backend=numpy
+python rag.py search "trade guilds and civic power"
+#   query: "trade guilds and civic power"  ·  mode=hybrid  backend=numpy
 #
-#   1. [0.812] Author, Title (2019) · IMG_3557 p.42
-#      …the Bajau move between reefs without ever claiming an island as home…
+#   1. [0.812] Author, Title (2019) · IMG_1234 p.42
+#      …the guild held its charter without ever owning the land it worked…
 
 # Narrow to one book (substring match on its title/slug), tune result count and channel:
-python rag.py search "enemies of all mankind" -k 3 --book pirates --mode lexical
+python rag.py search "the limits of sovereign immunity" -k 3 --book book_12 --mode lexical
 
 # Read a whole page (± neighbours) once a hit looks right — full text, no truncation:
-python rag.py get-page IMG_3557 --neighbors 1
+python rag.py get-page IMG_1234 --neighbors 1
 ```
 
 `search` modes: `hybrid` (default, dense + lexical fused), `dense` (embedding similarity —
