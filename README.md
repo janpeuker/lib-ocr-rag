@@ -32,10 +32,9 @@ The OCR engine is `mlx-vlm` (mlx, transformers, pillow, numpy). It also pulls
 eagerly builds the Qwen2-VL *processor*, which imports them. Apple-Silicon CPU/MPS wheels,
 **no CUDA**.
 
-The first run downloads the model into the HuggingFace cache (~2 GB). After that everything
-is offline **by default** — both tools set `HF_HUB_OFFLINE=1` themselves, so nothing to
-remember. To intentionally download a *new* model (`--model` / `--embed-model`), allow the
-network for that one run:
+The first run downloads models into the HuggingFace cache (~2 GB OCR + ~130 MB retrieval).
+After that everything is offline **by default** — both tools set `HF_HUB_OFFLINE=1`
+themselves. Allow the network for one run only to fetch a *new* model:
 
 ```bash
 HF_HUB_OFFLINE=0 python rag.py index --embed-model some/other-model
@@ -50,6 +49,7 @@ lines below can be skipped entirely:
 ./library.sh update              # OCR new photos in in/, then refresh the search index
 ./library.sh search "trade guilds and civic power" -k 3
 ./library.sh page IMG_1234 --neighbors 1
+./library.sh books               # what the library holds
 ./library.sh ocr run in/IMG_x.jpeg      # raw passthrough to ocr.py / rag.py
 ```
 
@@ -91,18 +91,17 @@ RAG — but a name-twin with *different* bytes is kept (fold map in `out/dedup.j
 
 What it does per image, in brief (each step is a feature spec — see **Design & docs**):
 
-1. **Downscale + orientation auto-correct** — read upright; if a shot is sideways, cheap
-   probes rank 0/90/180/270 and one full pass reads the winner.
-2. **Adaptive resolution** — read first at a cheap 1280 px; only pages that look
-   scrambled/looping are re-read sharper at 1600 px.
-3. **Detect the shot type from the OCR text** — `IMPRINT` (ISBN / © / CIP), `COVER` (sparse,
+1. **Downscale + orientation auto-correct** — cheap probes rank 0/90/180/270, one full pass
+   reads the winner; first at 1280 px, re-read at 1600 px only if the result looks scrambled.
+2. **Detect the shot type from the OCR text** — `IMPRINT` (ISBN / © / CIP), `COVER` (sparse,
    or colourful behind a library label), or `PAGE` / `SPREAD`. Cover/imprint shots become
-   bibliographic metadata; pages/spreads become body text. Handwriting is dropped; printed
-   library slips/stamps are kept.
-4. **Figures/maps** get a caption-only `> **[Figure — …]**` placeholder via a gated layout pass.
-5. **Group into books by title identity** — a book may span several days/sessions; capture
+   bibliographic metadata; pages/spreads become body text (and a cover/imprint that also
+   carries real prose contributes that too). Handwriting is dropped; printed library
+   slips/stamps are kept.
+3. **Figures/maps** get a caption-only `> **[Figure — …]**` placeholder via a gated layout pass.
+4. **Group into books by title identity** — a book may span several days/sessions; capture
    time and GPS are only *soft* hints. A cover may be shot first or last.
-6. **Name each book** — the cover title is read from the **largest type**, not reading order.
+5. **Name each book** — the cover title is read from the **largest type**, not reading order.
 
 ```bash
 python ocr.py batch in/ --force                                   # ignore cache, recompute
@@ -137,79 +136,48 @@ version changes (`--force` recomputes everything).
 
 ## Look up citations (local RAG)
 
-Once you've produced `out/book_*.md`, `rag.py` builds a small **offline** retrieval index so
-you (or Claude) can look up passages **without loading whole books into context** — the point
-is *look up, don't load*. It runs both a **dense** (embedding) and a **lexical** (FTS5)
-channel and fuses them, so an approximate author *and* a fuzzy concept both work.
+Once you've produced `out/book_*.md`, `rag.py` builds a small **offline** index so you (or
+Claude) can look up passages **without loading whole books into context** — *look up, don't
+load*. No LLM or harness needed: results print as readable text (`--json` is for machine
+callers).
 
 ```bash
 source .venv/bin/activate
-python rag.py index                          # chunk + embed out/book_*.md → out/rag.db
+python rag.py index                             # chunk + embed out/book_*.md → out/rag.db
 python rag.py search "where does the author tie identity to a trade rather than a place"
-python rag.py search "the limits of sovereign immunity" -k 3
-python rag.py get-page IMG_1234 --neighbors 1   # the page ± 1 neighbour, in full
-```
-
-- `index` is resumable and cache-aware — re-run it after new OCR and it re-embeds only
-  new/changed pages (`--force` re-embeds all; `--no-embed` chunks only). It's the one command
-  to (re)build everything.
-- `search` flags: `-k N`, `--mode hybrid|dense|lexical` (default `hybrid`), `--book <substr>`,
-  `--json` (structured, with paste-ready citations — *Author, Title (year) · IMG_x p.N* — and
-  an `image_path` back to the source photo).
-- `rag.py eval --verbose` scores dense vs lexical vs hybrid (recall@k / MRR) against a
-  gitignored `rag_probes.json`.
-
-Paths resolve against the `rag.py` install, not your shell's cwd, so these work from anywhere.
-
-### Just the CLI — no Skill, no LLM
-
-You don't need Claude or any harness to use the index: `search` and `get-page` print
-readable text to your terminal by default (the `--json` above is only for machine callers).
-It's a normal command-line search over your own books.
-
-```bash
-source .venv/bin/activate
-
-# Find passages — ranked hits, each with a relevance score, a citation, and a snippet:
-python rag.py search "trade guilds and civic power"
-#   query: "trade guilds and civic power"  ·  mode=hybrid  backend=numpy
-#
-#   1. [0.812] Author, Title (2019) · IMG_1234 p.42
+#   1. [7.02] Author, Title (2019) · IMG_1234 p.42
 #      …the guild held its charter without ever owning the land it worked…
-
-# Narrow to one book (substring match on its title/slug), tune result count and channel:
-python rag.py search "the limits of sovereign immunity" -k 3 --book book_12 --mode lexical
-
-# Read a whole page (± neighbours) once a hit looks right — full text, no truncation:
-python rag.py get-page IMG_1234 --neighbors 1
+python rag.py search "the limits of sovereign immunity" -k 3 --book book_12
+python rag.py get-page IMG_1234 --neighbors 1   # the page ± 1 neighbour, in full
+python rag.py books                             # what the library holds
 ```
 
-`search` modes: `hybrid` (default, dense + lexical fused), `dense` (embedding similarity —
-fuzzy concepts), `lexical` (FTS5 keyword — exact names/terms). Add `--book <substr>` to scope
-to a title, `-k N` to change how many hits come back. `get-page IMG_x` dumps the page text so
-you can copy a quote straight out; the JSON form carries an `image_path` back to the source
-photo if you want to eyeball the original.
+`index` is the *only* build command — first build and every refresh. It's cache-aware and
+resumable, re-embedding only new/changed pages, so a re-index after a few new photos is quick.
+Flags for the exceptions: `--force` (re-embed everything — after changing `--embed-model`, or
+a corrupt DB), `--no-embed` (re-chunk only; lexical search keeps working).
 
-### Re-indexing after new OCR
+`search` flags: `-k N` · `--book <substr>` · `--per-book N` (cap per book, default 3) ·
+`--mode hybrid|dense|lexical` · `--no-rerank` (faster, less precise) · `--json` (paste-ready
+citations *Author, Title (year) · IMG_x p.N*, plus an `image_path` back to the source photo).
 
-`out/rag.db` is built from the `out/book_*.md` files, so it goes stale whenever you OCR more
-pages. Rebuilding it is always the **same one command** — run it again:
+Paths resolve against the `rag.py` install, not your cwd, so these work from anywhere.
 
-```bash
-source .venv/bin/activate
-python rag.py index          # re-chunk + re-embed only new/changed pages, then you're current
-```
+### How ranking works
 
-It's cache-aware and resumable: unchanged pages are skipped, so a re-index after adding a
-handful of photos is quick. Reach for a flag only in the exceptions:
+A page is the **citation** unit, but it's too coarse to embed, so each page is split into
+~600-char **windows** which carry the vectors; a page scores as its best window. Four channels
+run and are fused by rank (RRF), then a cross-encoder re-scores the top candidates:
 
-- `python rag.py index --force` — ignore the cache and re-embed **everything** (use after
-  changing `--embed-model`, or if the DB looks corrupt).
-- `python rag.py index --no-embed` — re-chunk only, skip embedding (lexical search still
-  works; dense/hybrid won't reflect the new pages until you embed).
+| Channel | Catches |
+|---|---|
+| dense (embeddings) | paraphrase, concepts |
+| lexical BM25 (any term) | recall |
+| coverage (**all** terms) | queries whose point is the *combination* — "weavers **lenders**" |
+| fuzzy (vocabulary-expanded) | OCR'd near-spellings — a page reading "Wilhem Braun" answers "Wilhelm Braun" |
 
-There's no separate "update" step — `index` *is* both the first build and every refresh.
-(`./library.sh update` chains `ocr.py batch` + `rag.py index` when new photos landed too.)
+Results are then shaped: one hit per page, capped per book, near-duplicates dropped. Phrase a
+query like the sentence you expect to find — the reranker rewards that over bare keywords.
 
 ### Use it from another Claude project (`integration/`)
 
@@ -249,6 +217,30 @@ python ocr.py eval
 python ocr.py eval --max-edge 1600,1280,1024     # sweep first-pass resolution
 ```
 
+### Retrieval models (`rag.py`)
+
+Two small models, both swappable, both a one-time download (~130 MB total on top of the OCR
+model). Each has exactly one default — never hardcode a second.
+
+| Model | Size | Role | Swap with |
+|---|---|---|---|
+| **`BAAI/bge-small-en-v1.5`** | 33 M, 384-dim | `DEFAULT_EMBED_MODEL` — embeds the windows | `--embed-model` (then `index --force`) |
+| **`cross-encoder/ms-marco-MiniLM-L-12-v2`** | 33 M | `DEFAULT_RERANK_MODEL` — re-scores candidates | `--rerank-model`, or `--no-rerank` |
+
+The reranker is the piece that makes *relational* queries work. A bi-encoder scores query and
+passage separately, so "weavers lenders" collapses to its topic and returns pages *about*
+weavers; a cross-encoder reads the pair together and finds the page that says they **acted
+as lenders**. Because it only re-orders what the cheap channels already found, it can stay tiny.
+
+Both are English-first, which suits a mostly-English library; a multilingual upgrade
+(`bge-m3`, `bge-reranker-v2-m3`) is the documented path if `eval` ever shows non-English
+probes losing. Bigger *embeddings* are **not** the fix for a bad relational result — that was
+measured and deferred; see [`specs/028-retrieval-quality/`](specs/028-retrieval-quality/spec.md).
+
+```bash
+HF_HUB_OFFLINE=0 python rag.py index      # first run only, to fetch them
+```
+
 ---
 
 ## Design & docs
@@ -283,8 +275,10 @@ lifting is theirs:
   **[NumPy](https://numpy.org/)**.
 - Local RAG (`rag.py`):
   **[sentence-transformers](https://github.com/UKPLab/sentence-transformers)** with
-  **[BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)** embeddings, and
-  the **[Model Context Protocol](https://modelcontextprotocol.io/)** (Anthropic) for the
+  **[BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)** embeddings and
+  the **[ms-marco-MiniLM-L-12-v2](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-12-v2)**
+  cross-encoder reranker, SQLite **FTS5**, and the
+  **[Model Context Protocol](https://modelcontextprotocol.io/)** (Anthropic) for the
   optional MCP server.
 
 ## License

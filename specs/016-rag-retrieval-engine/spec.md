@@ -101,6 +101,17 @@ ANN index that this scale does not justify.
   already cached; 384 dims keeps the BLOB matrix tiny so the whole library fits in memory for the
   matmul. The "(a) swap store vs (b) swap search" asks are only fully orthogonal for the numpy
   backend; for FAISS/DuckDB the index *is* both — so one `--backend` switch is the right grain.
+- **Superseded at 7× scale (see [028](../028-retrieval-quality/spec.md)).** Everything
+  above was tuned against 21 books / 1163 chunks and held up structurally — SQLite +
+  BLOBs, numpy matmul, RRF and the asymmetric prefix are all unchanged at 126 books.
+  Three *parameter/grain* choices did not survive the growth: (a) the **page as the
+  embedding unit** (FR-003) — at ~370 tokens per vector the discriminating sentence is
+  averaged away, and 8 % of chunks silently truncated at bge-small's 512-token cap, so
+  vectors moved to sub-page `windows` with max-pooling; (b) **`CANDIDATES = 50`** — too
+  narrow to be a reranker's recall pool at this corpus size, now 200; (c) **two channels
+  and no result shaping** — the dense+lexical pair leaves relational queries unanswered
+  and lets one densely-matching book take every slot. The engine contract in FR-001/002/
+  005/006 is intact; 028 extends it rather than replacing it.
 - **Chunker bug found+fixed (step 1):** `split_long` was flushing a short paragraph alone before
   a huge one; the tiny-page merge + long-page split now share a `_fold_small` helper (no
   sub-`MIN_CHARS` stubs). 21 books → 1163 chunks (203–2658 chars), idempotent re-runs.

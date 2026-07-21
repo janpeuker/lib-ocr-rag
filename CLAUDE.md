@@ -97,12 +97,31 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   - `python rag.py index` — chunk `out/book_*.md` → embed → build `out/rag.db`.
     **This is also how you re-index after new OCR**: it's cache-aware and resumable,
     re-embedding only new/changed pages (`--force` redoes all; `--no-embed` chunks only).
-  - `python rag.py search "<q>" [-k N] [--mode hybrid|dense|lexical] [--book S] [--json]`
+  - `python rag.py search "<q>" [-k N] [--mode hybrid|dense|lexical] [--book S]
+    [--per-book N] [--no-rerank] [--json]`
   - `python rag.py get-page IMG_x [--neighbors N] [--json]`
+  - `python rag.py books [--json]` — what the catalog holds (scope a `--book` filter)
   - `python rag.py serve` — optional MCP stdio server (tools `search_library`/`get_page`).
-- **Catalog = source of truth.** `out/rag.db` (SQLite): chunks + `float32` BLOB vectors
-  + an FTS5 lexical table. No native vector type — similarity is a numpy matmul. Don't
-  add `sqlite-vec`/Chroma/FAISS to the default path (faiss/duckdb are deferred opt-ins).
+- **Catalog = source of truth.** `out/rag.db` (SQLite): chunks + a `windows` table
+  holding the `float32` BLOB vectors + an FTS5 lexical table. No native vector type —
+  similarity is a numpy matmul. Don't add `sqlite-vec`/Chroma/FAISS to the default path
+  (faiss/duckdb are deferred opt-ins).
+- **Chunk = citation unit, window = retrieval unit** (spec 028). A page chunk is what
+  gets returned and cited; it is additionally split into ~600-char `windows` which carry
+  the vectors, and a page scores as the **max** over its windows (never the average —
+  that re-dilutes exactly what windows fix). Don't move vectors back onto `chunks`: a
+  ~370-token page averaged into one 384-d vector buries the answering sentence, and 8 %
+  of chunks silently truncated at bge-small's 512-token cap.
+- **Four channels, then rerank, then shape** (spec 028). `hybrid` fuses dense + BM25-OR
+  + an **AND/coverage** channel (all query terms) + a **fuzzy** channel (terms expanded
+  against the FTS5 vocabulary via `fts5vocab` + stdlib `difflib`, so an OCR'd "Wilhem Braun"
+  answers "Wilhelm Braun") through RRF; then `DEFAULT_RERANK_MODEL`
+  (`cross-encoder/ms-marco-MiniLM-L-12-v2`) re-scores **at window grain** — a
+  cross-encoder truncates just like a bi-encoder, so never feed it whole pages. Then
+  results are shaped: one per page, `--per-book` cap (default 3), near-duplicates dropped
+  by token **containment** (not Jaccard — duplicate-book twins split at different lengths
+  and measured only 0.78). A bigger embedding model is *not* the fix for a relational
+  query and was measured and deferred; see the 028 decision log before reaching for one.
 - **`image_path` = escape hatch to the original page.** Every `search`/`get-page` JSON
   result carries `image_path`: the absolute path to the source photo in `in/` (or `null`).
   Bitmaps are deliberately **not** in the catalog (unsearchable, just bloat) — the path
@@ -123,7 +142,7 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   a `/ABSOLUTE/PATH/TO/lib-ocr-rag` **placeholder** (never a real local path — that must
   not leak into the public repo); substitute the real clone path on install, per
   `integration/README.md`.
-- **Eval** is stdlib-only (`rag.py eval`, recall@k/MRR) against `rag_probes.json`
+- **Eval** is stdlib-only (`rag.py eval`, recall@k/MRR per channel) against `rag_probes.json`
   (gitignored throwaway, like `experiments/`). Don't commit the probe set as a fixture.
 
 ## Working preferences

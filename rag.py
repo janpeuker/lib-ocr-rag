@@ -18,6 +18,7 @@ default (set HF_HUB_OFFLINE=0 explicitly to allow a new model download).
 """
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -46,10 +47,30 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_BATCH = 64  # encode + checkpoint in batches so a killed run resumes
 
-# Search (IMPLEMENTATION_PLAN.md §12.4). Dense + lexical channels fused with RRF.
+# Cross-encoder reranking (spec 028). A bi-encoder scores query and passage
+# separately, so a relational query ("weavers lenders") collapses to its topic
+# ("weavers") and the discriminating term is lost. A cross-encoder reads the
+# pair jointly and fixes exactly that. Small + English by design: the reranker only
+# reorders a pool the cheap channels already found. One default, swap via
+# --rerank-model, never a hardcoded second (Principle IV).
+DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+RERANK_WINDOWS = 250  # cap on (query, window) pairs scored per search. Tuned by
+                      # eval: 250 and 500 score identically (R@1 .75 / MRR .81 on the
+                      # probe set) and 250 halves the latency (~1.2 s vs ~2.4 s).
+
+# Search (IMPLEMENTATION_PLAN.md §12.4; channels extended in spec 028).
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "  # BGE query side
-CANDIDATES = 50   # per-channel candidate pool feeding fusion
+CANDIDATES = 200  # per-channel candidate pool feeding fusion (50 → 200: the corpus
+                  # grew 7× since 016, and the pool is the reranker's recall ceiling)
 RRF_K0 = 60       # Reciprocal Rank Fusion damping constant
+FUZZY_CUTOFF = 0.8   # difflib ratio for expanding a query term to OCR/spelling variants
+FUZZY_EXPANSIONS = 4  # max vocabulary variants per query term
+FUZZY_MIN_COUNT = 2   # ignore vocabulary terms this rare (OCR garbage, not variants)
+
+# Result shaping (spec 028). Without these, one densely-matching book monopolises
+# the page and overlap-split twins waste slots.
+PER_BOOK_DEFAULT = 3  # max results from any one book (0 = unlimited)
+DUP_RATIO = 0.85      # token-overlap containment above which a result is a near-duplicate
 STOPWORDS = {
     "the", "a", "an", "of", "to", "in", "on", "at", "by", "for", "and", "or",
     "is", "are", "was", "were", "be", "been", "with", "as", "that", "this", "it",
@@ -63,6 +84,16 @@ STOPWORDS = {
 MIN_CHARS = 200      # below this a page is merged into a neighbour
 MAX_CHARS = 2000     # above this a page is split on paragraph boundaries (~500 tokens)
 OVERLAP_CHARS = 200  # carried between split parts so a citation isn't cut mid-thought
+
+# Dual granularity (spec 028). The page-sized chunk stays the *citation* unit — it
+# is what makes a returned quote traceable — but it is far too coarse to embed: a
+# ~370-token page averaged into one 384-d vector buries the single sentence that
+# answers the query, and 8 % of chunks overflowed bge-small's 512-token cap and were
+# silently truncated. So each chunk is additionally split into small windows, and
+# those carry the vectors; a chunk scores as the best of its windows.
+WINDOW_CHARS = 600     # ~150 tokens — well inside any embed model's context
+WINDOW_OVERLAP = 120   # carry so a sentence split across windows still matches
+WINDOW_MIN_CHARS = 150  # below this a window is folded into its neighbour
 
 
 # --- Markdown parsing -------------------------------------------------------
@@ -139,19 +170,20 @@ def parse_book(path):
 
 # --- Chunking ---------------------------------------------------------------
 
-def _fold_small(texts):
-    """Fold any fragment shorter than MIN_CHARS into an adjacent one (§12.5).
+def _fold_small(texts, min_chars=MIN_CHARS):
+    """Fold any fragment shorter than `min_chars` into an adjacent one (§12.5).
 
     Merges backwards by default; a too-small leading fragment merges forwards.
-    Shared by page-unit merging and split-part cleanup so neither leaves a stub.
+    Shared by page-unit merging, split-part cleanup and window splitting (spec 028)
+    so none of them leaves a stub.
     """
     out = []
     for t in texts:
-        if out and len(t) < MIN_CHARS:
+        if out and len(t) < min_chars:
             out[-1] += "\n\n" + t
         else:
             out.append(t)
-    if len(out) >= 2 and len(out[0]) < MIN_CHARS:
+    if len(out) >= 2 and len(out[0]) < min_chars:
         out[1] = out[0] + "\n\n" + out[1]
         out = out[1:]
     return out
@@ -172,9 +204,14 @@ def merge_tiny(units):
     return out
 
 
-def split_long(text):
-    """Split text over MAX_CHARS on paragraph boundaries, with OVERLAP_CHARS carry."""
-    if len(text) <= MAX_CHARS:
+def split_long(text, max_chars=MAX_CHARS, overlap=OVERLAP_CHARS, min_chars=MIN_CHARS):
+    """Split text over `max_chars` on paragraph boundaries, with `overlap` carry.
+
+    Parameterised (spec 028) so page-chunk splitting and the finer window split
+    share one implementation — paragraph boundaries, overlap carry and stub folding
+    behave identically at both grains.
+    """
+    if len(text) <= max_chars:
         return [text]
     paras = re.split(r"\n\s*\n", text)
     parts = []
@@ -182,9 +219,9 @@ def split_long(text):
     for p in paras:
         # Only break when the current part can stand on its own; a tiny `cur`
         # before a huge paragraph must keep accreting, not flush as a stub.
-        if len(cur) >= MIN_CHARS and len(cur) + len(p) + 2 > MAX_CHARS:
+        if len(cur) >= min_chars and len(cur) + len(p) + 2 > max_chars:
             parts.append(cur.strip())
-            cur = cur[-OVERLAP_CHARS:] + "\n\n" + p  # overlap tail into next part
+            cur = cur[-overlap:] + "\n\n" + p  # overlap tail into next part
         else:
             cur = (cur + "\n\n" + p) if cur else p
     if cur.strip():
@@ -192,12 +229,50 @@ def split_long(text):
     # A single paragraph longer than the budget: hard-split with overlap.
     sized = []
     for part in parts:
-        if len(part) <= int(MAX_CHARS * 1.5):
+        if len(part) <= int(max_chars * 1.5):
             sized.append(part)
         else:
-            step = MAX_CHARS - OVERLAP_CHARS
-            sized.extend(part[i:i + MAX_CHARS] for i in range(0, len(part), step))
-    return _fold_small(sized)
+            step = max_chars - overlap
+            sized.extend(part[i:i + max_chars] for i in range(0, len(part), step))
+    return _fold_small(sized, min_chars)
+
+
+def split_windows(text):
+    """Split a chunk's text into the small windows that actually carry the vectors.
+
+    Paragraphs are the first boundary; a paragraph over the window budget is broken
+    on sentence ends so a window rarely starts mid-thought (the page split can be
+    cruder — it is never embedded directly).
+    """
+    pieces = []
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= WINDOW_CHARS:
+            pieces.append(para)
+            continue
+        sents = re.split(r"(?<=[.!?])\s+", para)
+        cur = ""
+        for s in sents:
+            if cur and len(cur) + len(s) + 1 > WINDOW_CHARS:
+                pieces.append(cur.strip())
+                cur = cur[-WINDOW_OVERLAP:] + " " + s
+            else:
+                cur = (cur + " " + s) if cur else s
+        if cur.strip():
+            pieces.append(cur.strip())
+    # Re-pack: accrete small paragraphs up to the budget, then fold any stub.
+    packed, cur = [], ""
+    for p in pieces:
+        if cur and len(cur) + len(p) + 2 > WINDOW_CHARS:
+            packed.append(cur)
+            cur = p
+        else:
+            cur = (cur + "\n\n" + p) if cur else p
+    if cur:
+        packed.append(cur)
+    return _fold_small(packed, WINDOW_MIN_CHARS) or [text]
 
 
 def build_embed_text(title, author, page, text):
@@ -230,6 +305,10 @@ def chunk_book(path):
                 "page": u["page"],
                 "text": part,
                 "embed_text": embed_text,
+                # Each window carries the same citation header, so a query naming
+                # the author/title still matches at window grain (spec 028).
+                "windows": [build_embed_text(title, author, u["page"], w)
+                            for w in split_windows(part)],
                 "content_sha": hashlib.sha1(embed_text.encode("utf-8")).hexdigest(),
             }
 
@@ -253,6 +332,18 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_book  ON chunks(book_file);
 CREATE INDEX IF NOT EXISTS idx_chunks_image ON chunks(image);
+-- Dense retrieval unit (spec 028): small windows of a chunk. The chunk stays the
+-- citation unit and holds the returned text; the vector lives here.
+CREATE TABLE IF NOT EXISTS windows (
+  id          TEXT PRIMARY KEY,   -- "{chunk_id}::w{n}"
+  chunk_id    TEXT NOT NULL,
+  ord         INTEGER NOT NULL,
+  text        TEXT NOT NULL,      -- citation header + window body (what gets embedded)
+  content_sha TEXT NOT NULL,
+  vec         BLOB,
+  vec_model   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_windows_chunk ON windows(chunk_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -265,6 +356,13 @@ def connect(db_path):
     if "vec_model" not in cols:  # migrate a step-1 db in place
         con.execute("ALTER TABLE chunks ADD COLUMN vec_model TEXT")
         con.commit()
+    # Vectors moved from chunks to windows (spec 028). A pre-028 catalog still
+    # carries chunk vectors; drop them so they can't be mistaken for current ones
+    # (the windows are re-embedded on the next index — the vec_model check drives it).
+    if con.execute("SELECT count(*) FROM chunks WHERE vec IS NOT NULL").fetchone()[0]:
+        if not con.execute("SELECT count(*) FROM windows").fetchone()[0]:
+            con.execute("UPDATE chunks SET vec=NULL, vec_model=NULL")
+            con.commit()
     return con
 
 
@@ -278,6 +376,17 @@ def get_meta(con, key, default=None):
     return row[0] if row else default
 
 
+def _write_windows(con, c):
+    """(Re)write one chunk's windows with NULL vectors, so embed_pending picks them up."""
+    con.execute("DELETE FROM windows WHERE chunk_id=?", (c["id"],))
+    con.executemany(
+        "INSERT INTO windows (id, chunk_id, ord, text, content_sha, vec) "
+        "VALUES (?,?,?,?,?, NULL)",
+        [(f"{c['id']}::w{n}", c["id"], n, w,
+          hashlib.sha1(w.encode("utf-8")).hexdigest())
+         for n, w in enumerate(c["windows"])])
+
+
 def write_catalog(db_path, chunks, force):
     """Upsert chunk rows, preserving a row's vec when its content is unchanged.
 
@@ -288,11 +397,17 @@ def write_catalog(db_path, chunks, force):
     con = connect(db_path)
     try:
         existing = dict(con.execute("SELECT id, content_sha FROM chunks"))
+        # A chunk row can be current while its windows are missing — that is the
+        # pre-028 catalog, where vectors hung off the chunk. Such a chunk keeps its
+        # row but still needs windows built (and embedded).
+        windowed = {r[0] for r in con.execute("SELECT DISTINCT chunk_id FROM windows")}
         seen, n_new, n_kept = set(), 0, 0
         for c in chunks:
             seen.add(c["id"])
             if not force and existing.get(c["id"]) == c["content_sha"]:
                 n_kept += 1
+                if c["id"] not in windowed:
+                    _write_windows(con, c)
                 continue
             con.execute(
                 """INSERT INTO chunks
@@ -308,9 +423,11 @@ def write_catalog(db_path, chunks, force):
                 (c["id"], c["book_file"], c["book_title"], c["author"], c["year"],
                  c["image"], c["page"], c["text"], c["embed_text"], c["content_sha"]),
             )
+            _write_windows(con, c)
             n_new += 1
         stale = [(i,) for i in existing if i not in seen]
         con.executemany("DELETE FROM chunks WHERE id=?", stale)
+        con.executemany("DELETE FROM windows WHERE chunk_id=?", stale)
         con.commit()
         return n_new, n_kept, len(stale)
     finally:
@@ -342,19 +459,19 @@ def load_embedder(model_name):
 
 
 def embed_pending(con, model_name, force):
-    """Encode chunks that lack a current-model vector; checkpoint per batch.
+    """Encode windows that lack a current-model vector; checkpoint per batch.
 
-    A chunk is (re)embedded when its vec is NULL (new/changed content — write_catalog
-    nulls it) or was produced by a different model. So a normal `index` embeds only
-    new pages; switching --embed-model re-embeds all; --force re-embeds everything.
-    Returns (n_embedded, dim).
+    A window is (re)embedded when its vec is NULL (new/changed content — write_catalog
+    rewrites windows with a NULL vec) or was produced by a different model. So a normal
+    `index` embeds only new pages; switching --embed-model re-embeds all; --force
+    re-embeds everything. Returns (n_embedded, dim).
     """
     import numpy as np
     if force:
-        rows = con.execute("SELECT id, embed_text FROM chunks").fetchall()
+        rows = con.execute("SELECT id, text FROM windows").fetchall()
     else:
         rows = con.execute(
-            "SELECT id, embed_text FROM chunks "
+            "SELECT id, text FROM windows "
             "WHERE vec IS NULL OR vec_model IS NULL OR vec_model != ?",
             (model_name,)).fetchall()
     if not rows:
@@ -370,8 +487,8 @@ def embed_pending(con, model_name, force):
         vecs = vecs.astype(np.float32)
         dim = vecs.shape[1]
         con.executemany(
-            "UPDATE chunks SET vec=?, vec_model=? WHERE id=?",
-            [(v.tobytes(), model_name, cid) for (cid, _), v in zip(batch, vecs)])
+            "UPDATE windows SET vec=?, vec_model=? WHERE id=?",
+            [(v.tobytes(), model_name, wid) for (wid, _), v in zip(batch, vecs)])
         con.commit()  # checkpoint so a kill resumes at the next batch
         done += len(batch)
         print(f"  embedding {done}/{len(rows)} (dim {dim})", end="\r", flush=True)
@@ -414,16 +531,35 @@ def load_backend(name):
 
 
 def build_backend(con, name):
-    """Load cached vectors from the catalog into the chosen backend."""
+    """Load cached window vectors from the catalog into the chosen backend.
+
+    Returns (backend, win2chunk) — the backend ranks *windows*, and the map folds a
+    window hit back onto the page chunk that owns it (spec 028)."""
     import numpy as np
-    rows = con.execute("SELECT id, vec FROM chunks WHERE vec IS NOT NULL").fetchall()
+    rows = con.execute(
+        "SELECT id, chunk_id, vec FROM windows WHERE vec IS NOT NULL").fetchall()
     if not rows:
         raise SystemExit("no embeddings — run `python rag.py index` first")
     ids = [r[0] for r in rows]
-    mat = np.vstack([np.frombuffer(r[1], np.float32) for r in rows])
+    win2chunk = {r[0]: r[1] for r in rows}
+    mat = np.vstack([np.frombuffer(r[2], np.float32) for r in rows])
     backend = load_backend(name)
     backend.build(ids, mat)
-    return backend
+    return backend, win2chunk
+
+
+def _pool_windows(win_hits, win2chunk, n):
+    """Fold ranked window hits onto their chunks, keeping each chunk's best window.
+
+    Max-pooling (not averaging) is the point: a page answers a query because *one*
+    passage on it does, and averaging would re-dilute exactly what windows fixed."""
+    best = {}
+    for wid, score in win_hits:
+        cid = win2chunk[wid]
+        if cid not in best or score > best[cid][1]:
+            best[cid] = (wid, score)
+    ranked = sorted(best.items(), key=lambda kv: kv[1][1], reverse=True)[:n]
+    return [(cid, score) for cid, (_, score) in ranked]
 
 
 def embed_query(model_name, query):
@@ -436,25 +572,85 @@ def embed_query(model_name, query):
 
 
 def dense_rank(con, query, model_name, backend_name, n):
-    backend = build_backend(con, backend_name)
-    return backend.query(embed_query(model_name, query), n)  # [(id, cosine)]
+    backend, win2chunk = build_backend(con, backend_name)
+    # Over-fetch windows: several of the top windows belong to the same page, so
+    # n windows would pool down to fewer than n chunks.
+    hits = backend.query(embed_query(model_name, query), n * 4)
+    return _pool_windows(hits, win2chunk, n)  # [(chunk_id, cosine)]
+
+
+def _query_terms(text):
+    """Content tokens of a query — shared by every lexical channel."""
+    return [t for t in re.findall(r"[a-z0-9]+", text.lower())
+            if len(t) > 2 and t not in STOPWORDS]
 
 
 def _fts_query(text):
     """Build an FTS5 OR-of-terms query (recall-friendly; bm25 ranks the rest)."""
-    toks = [t for t in re.findall(r"[a-z0-9]+", text.lower())
-            if len(t) > 2 and t not in STOPWORDS]
-    return " OR ".join(f'"{t}"' for t in toks)
+    return " OR ".join(f'"{t}"' for t in _query_terms(text))
 
 
-def lexical_rank(con, query, n):
-    q = _fts_query(query)
-    if not q:
+def _fts_rank(con, fts_query, n):
+    if not fts_query:
         return []
     rows = con.execute(
         "SELECT id, bm25(chunks_fts) AS s FROM chunks_fts "
-        "WHERE chunks_fts MATCH ? ORDER BY s LIMIT ?", (q, n)).fetchall()
+        "WHERE chunks_fts MATCH ? ORDER BY s LIMIT ?", (fts_query, n)).fetchall()
     return [(r[0], -float(r[1])) for r in rows]  # negate bm25 so higher = better
+
+
+def lexical_rank(con, query, n):
+    """OR-of-terms BM25 — the recall channel."""
+    return _fts_rank(con, _fts_query(query), n)
+
+
+def coverage_rank(con, query, n):
+    """BM25 over pages containing *every* query term (spec 028).
+
+    The OR channel is dominated by whichever terms are frequent in the corpus, so a
+    query like "weavers lenders" ranks pages saturated with "weavers" and
+    ignores the one discriminating word. Requiring all terms surfaces the page that
+    actually joins them. Contributes nothing when no page has them all — the OR
+    channel keeps recall, so this can afford to be strict.
+    """
+    toks = _query_terms(query)
+    if len(toks) < 2:
+        return []  # identical to the OR channel for a single term
+    return _fts_rank(con, " AND ".join(f'"{t}"' for t in toks), n)
+
+
+def _vocab(con):
+    """Indexed terms of the FTS5 table, most frequent first (for fuzzy expansion).
+
+    fts5vocab is a built-in SQLite shadow-table module — no dependency, and the whole
+    vocabulary loads in well under a second at this corpus size."""
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_vocab "
+                "USING fts5vocab(main, chunks_fts, 'row')")
+    return [r[0] for r in con.execute(
+        "SELECT term FROM temp.fts_vocab WHERE cnt >= ? ORDER BY cnt DESC",
+        (FUZZY_MIN_COUNT,))]
+
+
+def fuzzy_rank(con, query, n):
+    """BM25 over near-spellings of the query terms (spec 028).
+
+    OCR'd proper nouns are the worst case for both other channels: the dense one
+    collapses names, and exact FTS5 tokens miss by one character ("Wilhelm Braun" on the
+    page reads "Wilhem Braun"). Expanding each term against the actual indexed vocabulary
+    with stdlib difflib recovers those, and absorbs OCR spelling noise generally.
+    """
+    toks = _query_terms(query)
+    if not toks:
+        return []
+    vocab = _vocab(con)
+    expanded = []
+    for t in toks:
+        variants = difflib.get_close_matches(t, vocab, n=FUZZY_EXPANSIONS,
+                                             cutoff=FUZZY_CUTOFF)
+        expanded.extend(variants or [t])
+    if set(expanded) <= set(toks):
+        return []  # nothing new — the other channels already cover this query
+    return _fts_rank(con, " OR ".join(f'"{t}"' for t in dict.fromkeys(expanded)), n)
 
 
 def rrf(rankings, k0=RRF_K0):
@@ -466,14 +662,111 @@ def rrf(rankings, k0=RRF_K0):
     return sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
 
 
-def search(con, query, mode, backend_name, k, book=None):
-    """Return [(id, score)] for the top-k chunks under the chosen retrieval mode."""
+_RERANKER = {}  # model_name -> CrossEncoder (loaded once per process; `serve` reuses)
+
+
+def load_reranker(model_name):
+    """Load the cross-encoder (offline after first download); cached per process."""
+    if model_name not in _RERANKER:
+        from sentence_transformers import CrossEncoder
+        import torch
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        _RERANKER[model_name] = CrossEncoder(model_name, device=device)
+    return _RERANKER[model_name]
+
+
+def rerank(con, query, ranked, model_name, n):
+    """Re-score fused candidates with the cross-encoder, at window grain (spec 028).
+
+    Windows (~150 tokens) are scored rather than whole pages because a cross-encoder
+    truncates its input just as a bi-encoder does — feeding it 2000-char pages would
+    silently cut the tail. A page takes its best window's score, for the same reason
+    the dense channel max-pools.
+    """
+    if not ranked:
+        return ranked
+    order = {cid: i for i, (cid, _) in enumerate(ranked)}
+    qs = ",".join("?" * len(order))
+    rows = con.execute(
+        f"SELECT id, chunk_id, text FROM windows WHERE chunk_id IN ({qs})",
+        list(order)).fetchall()
+    # Keep the pool bounded by taking windows of the best-fused pages first.
+    rows.sort(key=lambda r: (order[r[1]], r[0]))
+    rows = rows[:RERANK_WINDOWS]
+    if not rows:
+        return ranked
+    scores = load_reranker(model_name).predict(
+        [(query, r[2]) for r in rows], show_progress_bar=False)
+    best = {}
+    for (_, cid, _), s in zip(rows, scores):
+        best[cid] = max(best.get(cid, float("-inf")), float(s))
+    # Pages whose windows were cut off by the cap keep their fused order, below the
+    # reranked ones — never dropped, just not promoted.
+    scored = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+    rest = [(cid, s) for cid, s in ranked if cid not in best]
+    return (scored + rest)[:n]
+
+
+def _shingles(text):
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def diversify(con, ranked, k, per_book=PER_BOOK_DEFAULT, dup_ratio=DUP_RATIO):
+    """Trim to k, capping any one book's share and dropping near-duplicates (spec 028).
+
+    Three distinct effects, all observed in the raw ranking: a book that happens to
+    discuss the query term densely takes every slot (5× Book B for "quernstone"); a long
+    page split into several chunks returns the same page twice under one citation;
+    and overlap twins plus unmerged duplicate books return the same prose twice.
+
+    A page appears at most once — `get-page` is how you expand it, so a second chunk
+    of the same page buys nothing and costs a slot.
+    """
+    out, per, kept, pages = [], {}, [], set()
+    for cid, score in ranked:
+        row = con.execute("SELECT book_file, image, text FROM chunks WHERE id=?",
+                          (cid,)).fetchone()
+        if row is None:
+            continue
+        book_file, image, text = row
+        if (book_file, image) in pages:
+            continue
+        if per_book and per.get(book_file, 0) >= per_book:
+            continue
+        # Containment, not Jaccard: the duplicate-book twins split at different
+        # lengths (1614 vs 2000 chars), which drags Jaccard under any usable
+        # threshold even when one chunk's text is almost entirely inside the other.
+        sh = _shingles(text)
+        if sh and any(len(sh & prev) / min(len(sh), len(prev)) >= dup_ratio
+                      for prev in kept if prev):
+            continue
+        out.append((cid, score))
+        kept.append(sh)
+        pages.add((book_file, image))
+        per[book_file] = per.get(book_file, 0) + 1
+        if len(out) >= k:
+            break
+    return out
+
+
+def search(con, query, mode, backend_name, k, book=None, rerank_model=None,
+           per_book=PER_BOOK_DEFAULT):
+    """Return [(id, score)] for the top-k chunks under the chosen retrieval mode.
+
+    Pipeline (spec 028): channels → RRF fusion → cross-encoder rerank → diversify.
+    `rerank_model=None` skips reranking (the pure-RRF path, and what `--mode dense`
+    or `lexical` means when you want to inspect one channel).
+    """
     model_name = get_meta(con, "embed_model") or DEFAULT_EMBED_MODEL
     rankings = []
     if mode in ("dense", "hybrid"):
         rankings.append(dense_rank(con, query, model_name, backend_name, CANDIDATES))
     if mode in ("lexical", "hybrid"):
         rankings.append(lexical_rank(con, query, CANDIDATES))
+    if mode == "hybrid":  # the precision channels only make sense alongside the others
+        rankings.append(coverage_rank(con, query, CANDIDATES))
+        rankings.append(fuzzy_rank(con, query, CANDIDATES))
+    rankings = [r for r in rankings if r]
     if book:
         allowed = {r[0] for r in con.execute(
             "SELECT id FROM chunks WHERE book_file LIKE ?", (f"%{book}%",))}
@@ -482,7 +775,9 @@ def search(con, query, mode, backend_name, k, book=None):
         ranked = rrf(rankings)
     else:
         ranked = rankings[0] if rankings else []
-    return ranked[:k]
+    if rerank_model:
+        ranked = rerank(con, query, ranked[:CANDIDATES], rerank_model, CANDIDATES)
+    return diversify(con, ranked, k, per_book)
 
 
 def _page(row):
@@ -593,14 +888,16 @@ def cmd_index(args):
         if args.no_embed:
             return
         n_emb, dim = embed_pending(con, args.embed_model, args.force)
-        n_total = con.execute("SELECT count(*) FROM chunks WHERE vec IS NOT NULL").fetchone()[0]
+        n_win, n_vec = con.execute(
+            "SELECT count(*), count(vec) FROM windows").fetchone()
     finally:
         con.close()
     if n_emb:
-        print(f"  embedded {n_emb} chunks with {args.embed_model} (dim {dim}); "
-              f"{n_total}/{len(rows)} now vectorized")
+        print(f"  embedded {n_emb} windows with {args.embed_model} (dim {dim}); "
+              f"{n_vec}/{n_win} windows vectorized ({len(rows)} chunks)")
     else:
-        print(f"  embeddings up to date ({n_total}/{len(rows)} vectorized, {args.embed_model})")
+        print(f"  embeddings up to date ({n_vec}/{n_win} windows vectorized, "
+              f"{args.embed_model})")
 
 
 def cmd_search(args):
@@ -611,7 +908,9 @@ def cmd_search(args):
     con.row_factory = sqlite3.Row
     try:
         hits = search(con, args.query, args.mode, args.backend, args.k,
-                      args.book or None)
+                      args.book or None,
+                      None if args.no_rerank else args.rerank_model,
+                      args.per_book)
         results = []
         for cid, score in hits:
             row = con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
@@ -676,6 +975,32 @@ def cmd_get_page(args):
         con.close()
 
 
+def cmd_books(args):
+    """List the catalog's books — so an agent can scope a --book filter (or just see
+    what the library actually holds) without opening any book file."""
+    src, db_path = _resolve_db(args)
+    if not db_path.exists():
+        sys.exit(f"no catalog at {db_path} — run `python rag.py index` first")
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT book_file, book_title, author, year, count(*) AS chunks, "
+            "       count(DISTINCT image) AS pages "
+            "FROM chunks GROUP BY book_file ORDER BY book_file").fetchall()
+        if args.json:
+            print(json.dumps([{"book_file": b, "book": t, "author": a or None,
+                               "year": y or None, "chunks": c, "pages": p}
+                              for b, t, a, y, c, p in rows],
+                             ensure_ascii=False, indent=2))
+            return
+        print(f"{len(rows)} books in {db_path}")
+        for b, t, a, y, c, p in rows:
+            bits = " · ".join(x for x in (a, y) if x)
+            print(f"  {b:52} {p:>4}p {c:>5}ch  {t}" + (f"  [{bits}]" if bits else ""))
+    finally:
+        con.close()
+
+
 def _probe_match(probe, row):
     """A result row satisfies a probe if every specified matcher matches."""
     if probe.get("book") and probe["book"] not in (row["book_file"] or ""):
@@ -711,7 +1036,7 @@ def cmd_eval(args):
         probes_path = SCRIPT_DIR / probes_path
     if not probes_path.exists():
         sys.exit(f"no probes file at {probes_path}. Create a JSON list like:\n"
-                 '  [{"query":"...","book":"book_01","image":"IMG_3557","page":"135"}]\n'
+                 '  [{"query":"...","book":"book_01","image":"IMG_1234","page":"135"}]\n'
                  "  query is required; book/image/page are optional matchers.")
     probes = json.loads(probes_path.read_text(encoding="utf-8"))
 
@@ -719,37 +1044,50 @@ def cmd_eval(args):
     con.row_factory = sqlite3.Row
     try:
         model_name = get_meta(con, "embed_model") or DEFAULT_EMBED_MODEL
-        backend = build_backend(con, args.backend)
+        backend, win2chunk = build_backend(con, args.backend)
         embedder = load_embedder(model_name)
         depth = 5
 
-        def dense(q):
+        def dense(q, n):
             import numpy as np
             v = embedder.encode([QUERY_PREFIX + q], normalize_embeddings=True,
                                 convert_to_numpy=True)[0].astype(np.float32)
-            return backend.query(v, depth)
+            return _pool_windows(backend.query(v, n * 4), win2chunk, n)
 
-        modes = ("dense", "lexical", "hybrid")
+        # Every channel gets its own column, so each addition in spec 028 has to earn
+        # its place against the probe set rather than on argument (Principle VI).
+        modes = ("dense", "lexical", "coverage", "fuzzy", "hybrid", "reranked")
         ranks = {m: [] for m in modes}
         for p in probes:
-            d = dense(p["query"])
-            lex = lexical_rank(con, p["query"], depth)
-            channels = {"dense": d, "lexical": lex, "hybrid": rrf([d, lex])[:depth]}
+            q = p["query"]
+            d = dense(q, CANDIDATES)
+            lex = lexical_rank(con, q, CANDIDATES)
+            cov = coverage_rank(con, q, CANDIDATES)
+            fuz = fuzzy_rank(con, q, CANDIDATES)
+            fused = rrf([r for r in (d, lex, cov, fuz) if r])
+            channels = {
+                "dense": d[:depth], "lexical": lex[:depth],
+                "coverage": cov[:depth], "fuzzy": fuz[:depth],
+                "hybrid": diversify(con, fused, depth, args.per_book),
+                "reranked": diversify(
+                    con, rerank(con, q, fused[:CANDIDATES], args.rerank_model, CANDIDATES),
+                    depth, args.per_book),
+            }
             for m in modes:
                 ranks[m].append(_first_hit_rank(con, channels[m], p, depth))
             if args.verbose:
-                rr = {m: ranks[m][-1] for m in modes}
-                print(f"  {p['query'][:52]:52}  dense={rr['dense']}  "
-                      f"lex={rr['lexical']}  hybrid={rr['hybrid']}")
+                rr = "  ".join(f"{m}={ranks[m][-1]}" for m in modes)
+                print(f"  {q[:44]:44}  {rr}")
 
         n = len(probes)
         recall = lambda rs, k: sum(1 for r in rs if r and r <= k) / n
         mrr = lambda rs: sum(1.0 / r for r in rs if r) / n
-        print(f"\n{n} probes · depth {depth} · backend {args.backend}")
-        print(f"{'mode':8} {'R@1':>6} {'R@3':>6} {'R@5':>6} {'MRR':>6}")
+        print(f"\n{n} probes · depth {depth} · backend {args.backend} "
+              f"· rerank {args.rerank_model}")
+        print(f"{'mode':9} {'R@1':>6} {'R@3':>6} {'R@5':>6} {'MRR':>6}")
         for m in modes:
             rs = ranks[m]
-            print(f"{m:8} {recall(rs,1):6.2f} {recall(rs,3):6.2f} "
+            print(f"{m:9} {recall(rs,1):6.2f} {recall(rs,3):6.2f} "
                   f"{recall(rs,5):6.2f} {mrr(rs):6.2f}")
     finally:
         con.close()
@@ -775,18 +1113,20 @@ def cmd_serve(args):
 
     @server.tool()
     def search_library(query: str, k: int = 5, book: str = "",
-                       mode: str = "hybrid") -> list:
+                       mode: str = "hybrid", per_book: int = PER_BOOK_DEFAULT) -> list:
         """Search the OCR'd book library for passages relevant to a query.
 
         Returns up to k results, each with a paste-ready `citation`, the book /
         author / image / page, and the full chunk `text` (quote it directly —
         no need to open the book file). `mode` is hybrid|dense|lexical; `book`
-        restricts to a book_file substring.
+        restricts to a book_file substring; `per_book` caps how many results any
+        one book may take (0 = no cap).
         """
         con = connect(db_path)
         con.row_factory = sqlite3.Row
         try:
-            hits = search(con, query, mode, backend, k, book or None)
+            hits = search(con, query, mode, backend, k, book or None,
+                          args.rerank_model, per_book)
             return [result_dict(con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone(),
                                 score) for cid, score in hits]
         finally:
@@ -794,7 +1134,7 @@ def cmd_serve(args):
 
     @server.tool()
     def get_page(image_id: str, neighbors: int = 0) -> list:
-        """Fetch a page (by image id, e.g. IMG_3557) in full, optionally with
+        """Fetch a page (by image id, e.g. IMG_1234) in full, optionally with
         `neighbors` pages on each side, for more context around a search hit."""
         con = connect(db_path)
         con.row_factory = sqlite3.Row
@@ -847,13 +1187,19 @@ def main():
     p_search.add_argument("--backend", default="numpy",
                           help="vector backend (numpy; faiss/duckdb in step 4)")
     p_search.add_argument("--book", default="", help="restrict to book_file containing this")
+    p_search.add_argument("--per-book", dest="per_book", type=int, default=PER_BOOK_DEFAULT,
+                          help=f"max results from one book (default {PER_BOOK_DEFAULT}; 0 = no cap)")
+    p_search.add_argument("--no-rerank", dest="no_rerank", action="store_true",
+                          help="skip the cross-encoder rerank (faster, less precise)")
+    p_search.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
+                          help=f"cross-encoder model (default: {DEFAULT_RERANK_MODEL})")
     p_search.add_argument("--json", action="store_true", help="emit JSON (for the Skill)")
     p_search.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
     p_search.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
     p_search.set_defaults(func=cmd_search)
 
     p_page = sub.add_parser("get-page", help="print a page (± neighbours) in full")
-    p_page.add_argument("image_id", help="image id, e.g. IMG_3557 or IMG_3557.jpeg")
+    p_page.add_argument("image_id", help="image id, e.g. IMG_1234 or IMG_1234.jpeg")
     p_page.add_argument("--neighbors", type=int, default=0,
                         help="also include N pages on each side (default 0)")
     p_page.add_argument("--json", action="store_true", help="emit JSON (for the Skill)")
@@ -861,9 +1207,20 @@ def main():
     p_page.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
     p_page.set_defaults(func=cmd_get_page)
 
+    p_books = sub.add_parser("books", help="list the books held in the catalog")
+    p_books.add_argument("--json", action="store_true", help="emit JSON (for the Skill)")
+    p_books.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
+    p_books.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
+    p_books.set_defaults(func=cmd_books)
+
+
     p_eval = sub.add_parser("eval", help="score dense/lexical/hybrid vs rag_probes.json")
     p_eval.add_argument("--probes", default="rag_probes.json", help="probe set (JSON list)")
     p_eval.add_argument("--backend", default="numpy", help="vector backend (default numpy)")
+    p_eval.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
+                        help=f"cross-encoder model (default: {DEFAULT_RERANK_MODEL})")
+    p_eval.add_argument("--per-book", dest="per_book", type=int, default=PER_BOOK_DEFAULT,
+                        help=f"max results from one book (default {PER_BOOK_DEFAULT}; 0 = no cap)")
     p_eval.add_argument("--verbose", action="store_true", help="print per-probe ranks")
     p_eval.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
     p_eval.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
@@ -871,6 +1228,8 @@ def main():
 
     p_serve = sub.add_parser("serve", help="run the optional MCP stdio server")
     p_serve.add_argument("--backend", default="numpy", help="vector backend (default numpy)")
+    p_serve.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
+                         help=f"cross-encoder model (default: {DEFAULT_RERANK_MODEL})")
     p_serve.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
     p_serve.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
     p_serve.set_defaults(func=cmd_serve)
