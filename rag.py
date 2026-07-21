@@ -822,6 +822,37 @@ def search(con, query, mode, backend_name, k, book=None, rerank_model=None,
     return diversify(con, ranked, k, per_book)
 
 
+def excerpt(text, query, width=240):
+    """Return the ~`width`-char span of `text` that best matches `query`.
+
+    A page is up to 2000 chars but only a sentence or two of it answered the query,
+    and showing the page's opening instead makes a correct hit look wrong — the term
+    you searched for is simply off-screen. Picks the densest run of query terms;
+    falls back to the head when nothing matches (e.g. a purely semantic hit).
+    """
+    flat = re.sub(r"\s+", " ", text).strip()
+    terms = _query_terms(query)
+    if not terms:
+        return flat[:width]
+    # Score every term occurrence, then take the window covering the most *distinct*
+    # terms — density, not raw count, so one repeated word can't win over a real match.
+    hits = []
+    for t in terms:
+        for m in re.finditer(re.escape(t), flat, re.IGNORECASE):
+            hits.append((m.start(), t))
+    if not hits:
+        return flat[:width]
+    hits.sort()
+    best_i, best_score = hits[0][0], 0
+    for i, (pos, _) in enumerate(hits):
+        seen = {t for p, t in hits[i:] if p < pos + width}
+        if len(seen) > best_score:
+            best_score, best_i = len(seen), pos
+    start = max(0, best_i - width // 4)
+    out = flat[start:start + width]
+    return ("…" if start else "") + out + ("…" if start + width < len(flat) else "")
+
+
 def _page(row):
     return row["page"] if row["page"] and row["page"] != "-" else None
 
@@ -969,6 +1000,8 @@ def cmd_search(args):
                       args.per_book)
         results = []
         for cid, score in hits:
+            if args.min_score is not None and score < args.min_score:
+                continue  # `-k` is a cap, not a quota — don't pad with non-answers
             row = con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
             results.append(result_dict(row, score))
         if args.json:
@@ -981,9 +1014,8 @@ def cmd_search(args):
             print("  (no results)")
             return
         for rank, r in enumerate(results, 1):
-            snippet = re.sub(r"\s+", " ", r["text"]).strip()[:240]
             print(f"\n{rank}. [{r['score']:.3f}] {r['citation']}")
-            print(f"   {snippet}…")
+            print(f"   {excerpt(r['text'], args.query)}")
     finally:
         con.close()
 
@@ -1520,6 +1552,10 @@ def main():
                           help=f"max results from one book (default {PER_BOOK_DEFAULT}; 0 = no cap)")
     p_search.add_argument("--no-rerank", dest="no_rerank", action="store_true",
                           help="skip the cross-encoder rerank (faster, less precise)")
+    p_search.add_argument("--min-score", dest="min_score", type=float, default=None,
+                          help="drop results below this score. With the default reranker "
+                               "the scores are logits: >0 is a real answer, <0 is a term "
+                               "that merely appears. `--min-score 0` trims the tail.")
     p_search.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
                           help=f"cross-encoder model (default: {DEFAULT_RERANK_MODEL})")
     p_search.add_argument("--json", action="store_true", help="emit JSON (for the Skill)")

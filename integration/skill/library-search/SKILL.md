@@ -53,6 +53,12 @@ Flags:
 | `--per-book N` | max results from one book (default 3). Use `0` when you *want* everything one book says. |
 | `--mode hybrid\|dense\|lexical` | default `hybrid`. `lexical` only for an exact phrase you know is on the page. |
 | `--no-rerank` | skip the cross-encoder (~2× faster, noticeably less precise). |
+| `--min-score 0` | drop the irrelevant tail — see scores below. |
+
+**Read the `score`.** With the default reranker it is a logit, not a similarity: **> 0 means
+the passage answers the query; < 0 means the terms merely occur there.** `-k` is a cap, not
+a quota, so a `-k 5` on a narrow question will happily return three real hits and two
+negative-scoring ones. Judge by score, not by position — or pass `--min-score 0`.
 
 Each JSON result has: `score`, `citation` (paste-ready), `book`, `author`, `year`,
 `image`, `image_path`, `page`, `book_file`, `text` (the full chunk).

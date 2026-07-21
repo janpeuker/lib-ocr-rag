@@ -176,8 +176,15 @@ Flags for the exceptions: `--force` (re-embed everything — after changing `--e
 a corrupt DB), `--no-embed` (re-chunk only; lexical search keeps working).
 
 `search` flags: `-k N` · `--book <substr>` · `--per-book N` (cap per book, default 3) ·
-`--mode hybrid|dense|lexical` · `--no-rerank` (faster, less precise) · `--json` (paste-ready
-citations *Author, Title (year) · IMG_x p.N*, plus an `image_path` back to the source photo).
+`--mode hybrid|dense|lexical` · `--no-rerank` (faster, less precise) · `--min-score 0` ·
+`--json` (paste-ready citations *Author, Title (year) · IMG_x p.N*, plus an `image_path`
+back to the source photo).
+
+The printed excerpt is the part of the page that **matched**, not its opening — otherwise a
+correct hit looks wrong because your term is off-screen. And `-k` is a cap, not a quota: with
+the default reranker the score is a logit, so **> 0 answers the query, < 0 merely contains
+the words**. On a narrow question the tail of a `-k 5` is often padding; `--min-score 0`
+trims it.
 
 Paths resolve against the `rag.py` install, not your cwd, so these work from anywhere.
 

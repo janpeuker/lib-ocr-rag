@@ -121,6 +121,20 @@ span the library rather than one densely-matching book.
   diluted one. Splitting the retrieval unit away from the citation unit gets the precision
   without paying that cost, and incidentally ends the silent 512-token truncation that hit
   8 % of chunks.
+- **The excerpt must be the matching span, not the page head.** Reported after delivery: a
+  query returned five hits of which only one *looked* like it contained the term. Two of the
+  five did contain it — the printed excerpt was simply the first 240 chars of a 2000-char
+  page, so the match was off-screen, and a correct hit read as a wrong one. `excerpt()` now
+  picks the span covering the most *distinct* query terms (density, so one repeated word
+  can't outrank a real match) and falls back to the head for a purely semantic hit. Display
+  only — ranking is untouched.
+- **`-k` is a cap, not a quota.** The other three hits in that same result set genuinely did
+  not contain the term, and the reranker knew: +3.4/+3.3 for the real answers against
+  −2.0/−2.3/−3.2 for the rest. Nothing was wrong with the ranking; the tool padded to `k`
+  regardless of quality. Rather than impose a default cutoff — the logit scale shifts with
+  the reranker model, and a query where everything scores low may still have a best answer
+  worth seeing — the scores are documented (>0 answers, <0 merely mentions) and `--min-score`
+  is opt-in.
 - **Why containment, not Jaccard, for near-duplicates.** Measured directly on the
   unmerged duplicate pair: Jaccard 0.78 (below any usable threshold) because the twins
   split at 1614 vs 2000 chars, while containment is ~0.98. Jaccard punishes length
