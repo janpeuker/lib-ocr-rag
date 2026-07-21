@@ -20,6 +20,9 @@ at it.
 | 005 | [Token-logprob read-confidence (Option A)](005-token-logprob-confidence.md) | ⏳ Deferred | [003](../003-orientation-adaptive-resolution/spec.md) |
 | 006 | [FAISS / DuckDB vector backends](006-faiss-duckdb-backends.md) | ⏳ Deferred (opt-in) | [016](../016-rag-retrieval-engine/spec.md) |
 | 007 | [Drop text printed inside a figure](007-figure-interior-text-removal.md) | ⏳ Deferred | [005](../005-figure-detection/spec.md) |
+| 008 | [Multilingual embedder + reranker](008-multilingual-retrieval-models.md) | ⏳ Deferred | [028](../028-retrieval-quality/spec.md) |
+| 009 | [Measurement gaps (probe depth · coverage channel · truncation check)](009-measurement-gaps.md) | ⏳ Deferred | [028](../028-retrieval-quality/spec.md), [029](../029-quality-guards/spec.md) |
+| 010 | [Excluding a photo that isn't a book page](010-non-book-photo-exclusion.md) | ⏳ Deferred | [029](../029-quality-guards/spec.md) |
 
 Legend: ❌ tried and not adopted (negative result / removed feature) · ⏳ understood,
 intentionally not built yet.
