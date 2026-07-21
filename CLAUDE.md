@@ -73,8 +73,7 @@ and drops handwritten annotations.
   often holds prose too. `write_book` emits it as a normal page section when it clears
   `META_BODY_MIN_CHARS` (re-applying the echo/runaway guards, which only run on the body
   path). Emit-time only — it never touches the cache, so a re-`batch` recovers it with no
-  re-OCR. A page missing from search may be a **coverage hole, not a ranking bug**: check
-  it reached a `out/book_*.md` at all before tuning retrieval.
+  re-OCR.
 - `IMG_3020` is the diagnostic page: a high score there means handwriting is being
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies
@@ -122,14 +121,39 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   by token **containment** (not Jaccard — duplicate-book twins split at different lengths
   and measured only 0.78). A bigger embedding model is *not* the fix for a relational
   query and was measured and deferred; see the 028 decision log before reaching for one.
+- **A missing result may be a coverage hole, not a ranking bug.** Before tuning
+  retrieval, check the page is in the catalog at all — `out/coverage.json` (written by
+  every `batch`) says, for every shot, either that its text reached a book or a *named
+  reason* why not. Anything `UNEXPLAINED` is a hole; cover/imprint shots hid ~295 k chars
+  of real prose until spec 027.
+- **Quality guards run themselves (spec 029).** `rag.py index` ends with a warn-only
+  `doctor` pass; `./library.sh doctor` runs it on demand. It re-checks what corpus growth
+  invalidates: uncitable labels, books with no chunks, unembedded/model-stale vectors,
+  truncation risk, `CANDIDATES` vs corpus size, probe validity, eval staleness, OCR↔RAG
+  page reconciliation, duplicate passages. All checks are **relative to the corpus
+  present** — never golden numbers, since `in/`/`out/` are gitignored and another user's
+  library shares nothing with this one. When a check fires, fix the cause or re-tune the
+  constant and update `CANDIDATES_TUNED_AT`; don't widen the threshold to silence it.
+- **Bump `WINDOW_VERSION` whenever `split_windows` changes.** A chunk's `content_sha`
+  covers the page text only, so without the bump a window-logic fix leaves the old
+  windows in place forever (the same role `PROMPT_VERSION` plays for the OCR cache).
+- **`rag.py eval` records history.** Each run appends corpus size + per-channel scores to
+  `out/eval_history.jsonl` and flags a reranked-MRR drop since the last comparable run —
+  decay shows up as drift, which a single run cannot show. Bootstrap a probe set for a
+  fresh corpus with `rag.py probes --scaffold` (then paraphrase the generated sentences;
+  verbatim ones flatter the lexical channel).
 - **`image_path` = escape hatch to the original page.** Every `search`/`get-page` JSON
   result carries `image_path`: the absolute path to the source photo in `in/` (or `null`).
   Bitmaps are deliberately **not** in the catalog (unsearchable, just bloat) — the path
   lets an agent `Read` the original to verify garbled OCR, inspect figures/tables, or
   recover the handwriting the Markdown dropped (the photo is the only place it survives).
   Resolved via `_source_image_path()` against `SCRIPT_DIR/in`; `test/` fixtures are not
-  exposed. The stored `image` label already includes the `.jpeg` suffix, and some labels
-  are section headings, not filenames — those resolve to `null`.
+  exposed. The stored `image` label always includes the `.jpeg` suffix. **Every chunk must
+  resolve to a real page file** — a label that isn't a filename is a bug, not a quirk:
+  `parse_book` used to accept any `## ` line as an image heading, so a page's own Markdown
+  subheading opened a bogus section (123 chunks under 71 invented labels, all with broken
+  citations). `_IMAGE_HEADING` now requires an image extension, and `rag.py doctor` checks
+  it. This was documented here as expected behaviour for months — don't re-rationalize it.
 - **Default embed model** is `DEFAULT_EMBED_MODEL` in `rag.py` (`BAAI/bge-small-en-v1.5`);
   switch via `--embed-model`, never hardcode a second. `bge-small` is cached locally —
   don't re-download. Passages are embedded raw; the BGE query prefix is applied in `search`.
@@ -142,8 +166,11 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   a `/ABSOLUTE/PATH/TO/lib-ocr-rag` **placeholder** (never a real local path — that must
   not leak into the public repo); substitute the real clone path on install, per
   `integration/README.md`.
-- **Eval** is stdlib-only (`rag.py eval`, recall@k/MRR per channel) against `rag_probes.json`
-  (gitignored throwaway, like `experiments/`). Don't commit the probe set as a fixture.
+- **Eval** is stdlib-only (`rag.py eval`, recall@k/MRR per channel) against
+  `rag_probes.json` (gitignored throwaway, like `experiments/`). Don't commit the probe
+  set as a fixture. **Prefer `image` matchers over `book`** — book numbers renumber as
+  the library grows, and three stale `book_NN` probes read as total retrieval failure
+  until corrected.
 
 ## Working preferences
 

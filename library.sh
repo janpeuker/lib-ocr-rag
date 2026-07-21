@@ -13,10 +13,15 @@ usage() {
 Usage: ./library.sh <command> [args...]
 
   update              OCR new photos in in/ then refresh the RAG catalog
-                      (= ocr.py batch + rag.py index; both resume-by-default)
+                      (= ocr.py batch + rag.py index; both resume-by-default).
+                      Ends with a warn-only health check (spec 029).
   search "<query>"    Search the library (passthrough to rag.py search: -k, --mode,
                       --book, --json, ...)
   page IMG_x          Fetch one page by image label (passthrough to rag.py get-page)
+  books               List what the catalog holds
+  doctor              Re-check the assumptions corpus growth invalidates
+  eval                Score retrieval against rag_probes.json (see rag.py probes
+                      --scaffold to bootstrap a probe set)
   ocr <args...>       Raw ocr.py passthrough (e.g. ./library.sh ocr run in/IMG_x.jpeg)
   rag <args...>       Raw rag.py passthrough (e.g. ./library.sh rag index --force)
 EOF
@@ -28,6 +33,9 @@ case "$cmd" in
   update)  python ocr.py batch "$@" && python rag.py index ;;
   search)  python rag.py search "$@" ;;
   page)    python rag.py get-page "$@" ;;
+  books)   python rag.py books "$@" ;;
+  doctor)  python rag.py doctor "$@" ;;
+  eval)    python rag.py eval "$@" ;;
   ocr)     python ocr.py "$@" ;;
   rag)     python rag.py "$@" ;;
   *)       usage ;;

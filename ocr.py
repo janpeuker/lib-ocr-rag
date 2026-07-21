@@ -2025,6 +2025,59 @@ def book_meta(book) -> dict:
     return fields
 
 
+def coverage_reason(rec, in_book: bool) -> str:
+    """Why this shot's text is (or isn't) in a book file — "" means it is.
+
+    The auditable claim is: **every shot holding real text either reaches a book or has
+    a named reason**. Anything else is a silent coverage hole, which is what hid 99
+    imprint pages (~295 k chars) until spec 027 — invisible because retrieval can only
+    fail to rank what it was given, never report what it never saw.
+    """
+    if in_book:
+        return ""
+    # Byte-identical copies never become records — dedup_by_content drops them from the
+    # work list before processing (§20) — so there is no alias case to explain here.
+    text = (rec.get("ocr_text") or "").strip()
+    if len(text) < META_BODY_MIN_CHARS:
+        return "thin-text"                # a spine, a blank verso, a photo of a shelf
+    if _is_prompt_echo(text):
+        return "prompt-echo-healed"       # §23
+    if _is_runaway(text):
+        return "runaway-healed"           # §26
+    if rec.get("role") == "meta":
+        return "meta-below-recovery-gate"  # §27: title block only, already in frontmatter
+    if rec.get("role") == "skip":
+        return "skipped"
+    return "UNEXPLAINED"
+
+
+def write_coverage(out_dir, records, books) -> None:
+    """Audit which shots' text reached a book file; write out/coverage.json (spec 029).
+
+    Cheap (no OCR, no model) and computed from the same in-memory state the emit path
+    just used, so it cannot drift from what was actually written."""
+    emitted = {r["image"] for b in books for r in b["records"]
+               if (r["role"] == "body" and r["raw_md"].strip()) or recovered_body(r)}
+    rows, counts = [], {}
+    for r in records:
+        reason = coverage_reason(r, r["image"] in emitted)
+        key = reason or "emitted"
+        counts[key] = counts.get(key, 0) + 1
+        if reason:
+            rows.append({"image": r["image"], "type": r.get("type"),
+                         "role": r.get("role"), "reason": reason,
+                         "chars": len(r.get("ocr_text") or "")})
+    unexplained = [x for x in rows if x["reason"] == "UNEXPLAINED"]
+    (Path(out_dir) / "coverage.json").write_text(json.dumps(
+        {"summary": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
+         "not_emitted": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+    if unexplained:
+        print(f"⚠ coverage: {len(unexplained)} shot(s) hold text that reached no book "
+              f"file for no known reason (e.g. "
+              f"{', '.join(x['image'] for x in unexplained[:3])}); see "
+              f"{out_dir}/coverage.json", file=sys.stderr)
+
+
 def write_report(out_dir, books, ris=None) -> None:
     """Human entry point to a whole batch: every book with structured metadata
     (title, author, publisher, year, ISBN, call no.), capture timespan, location
@@ -2152,6 +2205,7 @@ def emit_all(out_dir, records, ris=None, merges=None, titles=None) -> list:
         write_book(out_dir, i, book, ris)
     write_index(out_dir, records, books)
     write_report(out_dir, books, ris)
+    write_coverage(out_dir, records, books)
     # Discovery aid: ranked same-title candidates a human may add to in/merges.txt.
     (Path(out_dir) / "merge_candidates.json").write_text(
         json.dumps(merge_candidates(books), ensure_ascii=False, indent=2), encoding="utf-8")

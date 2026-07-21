@@ -55,6 +55,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 026 | [Metadata hygiene (full-title RIS match · CIP-boilerplate reject · runaway heal)](026-metadata-hygiene/spec.md) | Delivered | — | — |
 | 027 | [Body text recovery from cover/imprint shots](027-meta-shot-text-recovery/spec.md) | Delivered | — | — |
 | 028 | [Retrieval quality at 100+ books (windows · channels · rerank · diversity)](028-retrieval-quality/spec.md) | Delivered | — | — |
+| 029 | [Quality guards (coverage audit · catalog doctor · eval drift)](029-quality-guards/spec.md) | Delivered | — | — |
 
 **Negative results & deferred work** live as lighter cards in
 [`specs/experiments/`](experiments/README.md) — features we tried and rejected/removed,

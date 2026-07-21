@@ -18,6 +18,7 @@ default (set HF_HUB_OFFLINE=0 explicitly to allow a new model download).
 """
 
 import argparse
+import datetime
 import difflib
 import hashlib
 import json
@@ -71,6 +72,16 @@ FUZZY_MIN_COUNT = 2   # ignore vocabulary terms this rare (OCR garbage, not vari
 # the page and overlap-split twins waste slots.
 PER_BOOK_DEFAULT = 3  # max results from any one book (0 = unlimited)
 DUP_RATIO = 0.85      # token-overlap containment above which a result is a near-duplicate
+
+# Health checks (spec 029). This corpus grew 7× (1163 → 9483 chunks) against constants
+# tuned at the small size, and nothing said so. `doctor` re-checks the assumptions that
+# scale can invalidate. All thresholds are *relative* — no golden numbers — so the
+# checks work on any library, which matters because in/ and out/ are gitignored and a
+# new adopter has no fixtures at all.
+CANDIDATES_TUNED_AT = 9500  # corpus size (chunks) CANDIDATES was last chosen against
+SCALE_WARN_FACTOR = 3       # warn once the corpus outgrows that by this much
+EVAL_STALE_GROWTH = 0.25    # warn when the corpus grew this fraction since the last eval
+EVAL_HISTORY = "eval_history.jsonl"  # appended per eval run, for drift over time
 STOPWORDS = {
     "the", "a", "an", "of", "to", "in", "on", "at", "by", "for", "and", "or",
     "is", "are", "was", "were", "be", "been", "with", "as", "that", "this", "it",
@@ -94,6 +105,10 @@ OVERLAP_CHARS = 200  # carried between split parts so a citation isn't cut mid-t
 WINDOW_CHARS = 600     # ~150 tokens — well inside any embed model's context
 WINDOW_OVERLAP = 120   # carry so a sentence split across windows still matches
 WINDOW_MIN_CHARS = 150  # below this a window is folded into its neighbour
+# Bump when split_windows' output changes. A chunk's content_sha covers the *page* text,
+# so without this a change to the window logic leaves the old windows in place forever —
+# the same auto-invalidation the OCR cache gets from PROMPT_VERSION (Principle V).
+WINDOW_VERSION = "2"
 
 
 # --- Markdown parsing -------------------------------------------------------
@@ -117,6 +132,16 @@ def parse_yaml_block(fm):
         key, val = line.split(":", 1)
         meta[key.strip()] = val.strip().strip('"').strip("'").strip()
     return meta
+
+
+# An image section heading is `## {image_filename}` — and *only* that. A page's own
+# OCR'd Markdown routinely contains its own `## Subheading` lines, which would
+# otherwise be read as the start of a new image section: the text after them gets
+# attributed to a non-existent "image" (measured: 123 chunks under 71 invented labels),
+# so those passages carry an uncitable citation, a null image_path, and are lost to
+# `get-page` for the real page. Requiring an image extension separates the two cleanly
+# (all 2993 real headings end in .jpeg; none of the 76 stray ones did).
+_IMAGE_HEADING = re.compile(r"^##\s+(\S.*\.(?:jpe?g|png|tiff?|heic))\s*$", re.IGNORECASE)
 
 
 def _first_h1(body):
@@ -149,8 +174,8 @@ def parse_book(path):
         buf.clear()
 
     for line in body.splitlines():
-        # `## IMG_*` (but not `### Page`): \s after `##` excludes a third `#`.
-        m_img = re.match(r"^##\s+(\S.*?)\s*$", line)
+        # `## IMG_*.jpeg` (but not `### Page`): \s after `##` excludes a third `#`.
+        m_img = _IMAGE_HEADING.match(line)
         m_pg = re.match(r"^###\s+Page\s+(\S+)", line, re.IGNORECASE)
         if m_pg:
             flush()
@@ -272,7 +297,17 @@ def split_windows(text):
             cur = (cur + "\n\n" + p) if cur else p
     if cur:
         packed.append(cur)
-    return _fold_small(packed, WINDOW_MIN_CHARS) or [text]
+    # Hard cap. Text with neither paragraph nor sentence boundaries — a table, an index,
+    # a reference list — survives both splits above intact and would then be silently
+    # truncated by the embedder. Slice it with overlap so no window exceeds the budget.
+    sized = []
+    for p in packed:
+        if len(p) <= int(WINDOW_CHARS * 1.5):
+            sized.append(p)
+        else:
+            step = WINDOW_CHARS - WINDOW_OVERLAP
+            sized.extend(p[i:i + WINDOW_CHARS] for i in range(0, len(p), step))
+    return _fold_small(sized, WINDOW_MIN_CHARS) or [text]
 
 
 def build_embed_text(title, author, page, text):
@@ -400,6 +435,10 @@ def write_catalog(db_path, chunks, force):
         # A chunk row can be current while its windows are missing — that is the
         # pre-028 catalog, where vectors hung off the chunk. Such a chunk keeps its
         # row but still needs windows built (and embedded).
+        # A window-logic change invalidates every window, regardless of chunk content.
+        if get_meta(con, "window_version") != WINDOW_VERSION:
+            con.execute("DELETE FROM windows")
+            set_meta(con, "window_version", WINDOW_VERSION)
         windowed = {r[0] for r in con.execute("SELECT DISTINCT chunk_id FROM windows")}
         seen, n_new, n_kept = set(), 0, 0
         for c in chunks:
@@ -495,6 +534,9 @@ def embed_pending(con, model_name, force):
     print()
     set_meta(con, "embed_model", model_name)
     set_meta(con, "embed_dim", dim)
+    # Recorded so `doctor` can flag silent truncation without loading the model
+    # (8 % of page-grain chunks used to overflow this cap unnoticed).
+    set_meta(con, "embed_max_tokens", getattr(embedder, "max_seq_length", 0) or 0)
     con.commit()
     return len(rows), dim
 
@@ -899,6 +941,20 @@ def cmd_index(args):
         print(f"  embeddings up to date ({n_vec}/{n_win} windows vectorized, "
               f"{args.embed_model})")
 
+    # Warn-only health check on the everyday path (spec 029). A guard you have to
+    # remember to run is a guard that does not run: the drift this catches accumulated
+    # over 100 books precisely because nothing checked unprompted. Never blocks.
+    if not args.no_check:
+        probes_path = SCRIPT_DIR / "rag_probes.json"
+        con = connect(db_path)
+        try:
+            print("\nhealth check (`rag.py doctor` for detail):")
+            n_warn = run_doctor(con, src, probes_path, verbose=False)
+        finally:
+            con.close()
+        if not n_warn:
+            print("  ok  all checks passed")
+
 
 def cmd_search(args):
     src, db_path = _resolve_db(args)
@@ -1001,6 +1057,190 @@ def cmd_books(args):
         con.close()
 
 
+# --- health checks (spec 029) -----------------------------------------------
+
+def _checks(con, src, probes_path):
+    """Yield (level, name, message) for each catalog invariant.
+
+    Every check is relative to the corpus in front of it — no committed fixture, no
+    golden number — because in/ and out/ are gitignored, so a second user of this repo
+    has an entirely different library and no baseline to compare against. Each check
+    exists because its failure mode actually happened here and went unnoticed.
+    """
+    n_chunks, n_books = con.execute(
+        "SELECT count(*), count(DISTINCT book_file) FROM chunks").fetchone()
+    yield "info", "corpus", f"{n_books} books · {n_chunks} chunks"
+
+    # 1. Uncitable image labels. A chunk whose image is not a real page file has a
+    # broken citation, a null image_path and is unreachable by get-page. This is how
+    # a Markdown-heading-vs-image-label confusion hid 123 chunks under 71 fake images.
+    bad = con.execute(
+        "SELECT image, count(*) c FROM chunks WHERE image NOT LIKE '%.jpeg' "
+        "GROUP BY 1 ORDER BY c DESC").fetchall()
+    if bad:
+        n = sum(c for _, c in bad)
+        yield ("warn", "uncitable-labels",
+               f"{n} chunks under {len(bad)} non-filename image labels "
+               f"(e.g. {bad[0][0][:40]!r}) — these cannot be cited or re-opened")
+    else:
+        yield "ok", "uncitable-labels", "every chunk cites a real page file"
+
+    # 2. Pages present as text but absent from the catalog: a book file that produced
+    # no chunks at all is silently unsearchable.
+    empty = [p.name for p in sorted(Path(src).glob("book_*.md"))
+             if not any(True for _ in chunk_book(p))]
+    if empty:
+        yield ("warn", "empty-books",
+               f"{len(empty)} book file(s) produced no chunks: {', '.join(empty[:3])}"
+               + (" …" if len(empty) > 3 else ""))
+    else:
+        yield "ok", "empty-books", "every book file contributes chunks"
+
+    # 3. Vector health: unembedded windows, or vectors left behind by a model swap.
+    n_win, n_vec = con.execute("SELECT count(*), count(vec) FROM windows").fetchone()
+    model = get_meta(con, "embed_model") or DEFAULT_EMBED_MODEL
+    stale = con.execute("SELECT count(*) FROM windows WHERE vec IS NOT NULL "
+                        "AND vec_model IS NOT NULL AND vec_model != ?", (model,)).fetchone()[0]
+    if n_vec < n_win:
+        yield "warn", "vectors", f"{n_win - n_vec}/{n_win} windows unembedded — run `rag.py index`"
+    elif stale:
+        yield "warn", "vectors", f"{stale} windows embedded by a different model than {model}"
+    else:
+        yield "ok", "vectors", f"{n_vec} windows vectorized with {model}"
+
+    # 4. Silent truncation. The embedder drops whatever exceeds its context, which is
+    # invisible in every output — it just quietly stops matching.
+    cap = int(get_meta(con, "embed_max_tokens", 0) or 0)
+    if not cap:
+        yield ("info", "truncation",
+               "embed context cap not recorded yet — set on the next embedding pass")
+    else:
+        # 4.0 chars/token, measured over 3000 windows of this corpus. A looser estimate
+        # cries wolf (3.5 flagged 469 windows where only 147 truly overflowed), and a
+        # check that warns about nothing gets ignored — which is how drift survives.
+        long_chars = int(cap * 4.0)
+        over = con.execute("SELECT count(*) FROM windows WHERE length(text) > ?",
+                           (long_chars,)).fetchone()[0]
+        if over:
+            yield ("warn", "truncation",
+                   f"{over}/{n_win} windows may exceed the {cap}-token embed cap "
+                   f"(>{long_chars} chars) and be silently cut")
+        else:
+            yield "ok", "truncation", f"all windows fit the {cap}-token embed cap"
+
+    # 5. Scale drift: a candidate pool tuned at one corpus size is the reranker's
+    # recall ceiling at every later size, and nothing recomputes it.
+    if n_chunks > CANDIDATES_TUNED_AT * SCALE_WARN_FACTOR:
+        yield ("warn", "scale",
+               f"corpus is {n_chunks/CANDIDATES_TUNED_AT:.1f}× the size CANDIDATES="
+               f"{CANDIDATES} was tuned at ({CANDIDATES_TUNED_AT} chunks) — re-tune "
+               f"against `rag.py eval` and update CANDIDATES_TUNED_AT")
+    else:
+        yield "ok", "scale", f"CANDIDATES={CANDIDATES} still sized for {n_chunks} chunks"
+
+    # 6. Probe validity. A matcher pointing at nothing scores 0 and reads as a
+    # retrieval failure; three probes here matched book numbers that had renumbered.
+    if probes_path.exists():
+        probes = json.loads(probes_path.read_text(encoding="utf-8"))
+        dead = []
+        for p in probes:
+            where, args = [], []
+            if p.get("book"):
+                where.append("book_file LIKE ?"); args.append(f"%{p['book']}%")
+            if p.get("image"):
+                where.append("image LIKE ?"); args.append(f"{p['image']}%")
+            if p.get("page"):
+                where.append("page = ?"); args.append(str(p["page"]))
+            if not where:
+                continue
+            if not con.execute("SELECT 1 FROM chunks WHERE " + " AND ".join(where)
+                               + " LIMIT 1", args).fetchone():
+                dead.append(p["query"][:40])
+        if dead:
+            yield ("warn", "probes",
+                   f"{len(dead)}/{len(probes)} probes match nothing in the catalog "
+                   f"(e.g. {dead[0]!r}) — stale matcher, not a retrieval failure. "
+                   f"Prefer `image` over `book`: book numbers renumber as the library grows")
+        else:
+            yield "ok", "probes", f"all {len(probes)} probe matchers resolve"
+    else:
+        yield ("warn", "probes",
+               f"no probe set at {probes_path.name} — retrieval quality is unmeasured; "
+               f"run `rag.py probes --scaffold` to bootstrap one from this corpus")
+
+    # 7. Eval staleness: quality is only known as of the last measurement.
+    at = int(get_meta(con, "eval_chunks", 0) or 0)
+    if not at:
+        yield "warn", "eval", "never evaluated — run `rag.py eval`"
+    elif n_chunks > at * (1 + EVAL_STALE_GROWTH):
+        yield ("warn", "eval",
+               f"corpus grew {100*(n_chunks-at)/at:.0f}% since the last eval "
+               f"({at} → {n_chunks} chunks) — re-run `rag.py eval`")
+    else:
+        yield "ok", "eval", f"last evaluated at {at} chunks"
+
+    # 8. Cross-tool reconciliation. ocr.py records what it emitted in coverage.json;
+    # this is the only place the two tools' views of the same corpus are compared, and
+    # it is where a whole class of "the text exists but isn't searchable" bug lands.
+    # A small gap is expected: a page of only tiny fragments is folded into its
+    # neighbour by merge_tiny and keeps that neighbour's citation.
+    cov = Path(src) / "coverage.json"
+    if cov.exists():
+        data = json.loads(cov.read_text(encoding="utf-8"))
+        emitted = sum(data["summary"].values()) - len(data["not_emitted"])
+        n_img = con.execute("SELECT count(DISTINCT image) FROM chunks").fetchone()[0]
+        gap = emitted - n_img
+        if gap > max(5, emitted * 0.02):
+            yield ("warn", "ocr-rag-gap",
+                   f"{gap} pages were written to book files but produced no chunk of "
+                   f"their own — too many to be merge_tiny folding; re-run `rag.py index`")
+        else:
+            yield ("ok", "ocr-rag-gap",
+                   f"{n_img} pages indexed of {emitted} emitted ({gap} folded into neighbours)")
+
+    # 9. Duplicate books. Reported as info, not a warning: re-reading a book you forgot
+    # you already read is normal use, and spec 028's near-duplicate suppression already
+    # stops the twins from taking two result slots. Worth surfacing only so the count is
+    # visible if it ever looks wrong — `in/merges.txt` folds them if you care to.
+    dups = con.execute(
+        "SELECT count(*) FROM (SELECT substr(text,1,200) p, count(DISTINCT image) n "
+        "FROM chunks GROUP BY p HAVING n > 1)").fetchone()[0]
+    if dups:
+        yield ("info", "duplicates",
+               f"{dups} passages appear under 2+ images (a book read twice — expected; "
+               f"deduped at search time, fold with in/merges.txt if you want)")
+
+
+def run_doctor(con, src, probes_path, verbose=True):
+    """Run every check; return the number of warnings."""
+    results = list(_checks(con, src, probes_path))
+    n_warn = sum(1 for lvl, _, _ in results if lvl == "warn")
+    for lvl, name, msg in results:
+        if lvl == "ok" and not verbose:
+            continue
+        mark = {"ok": "  ok  ", "warn": " WARN ", "info": "      "}[lvl]
+        print(f"{mark}{name:18} {msg}")
+    return n_warn
+
+
+def cmd_doctor(args):
+    """Check the catalog's invariants — the assumptions that corpus growth invalidates."""
+    src, db_path = _resolve_db(args)
+    if not db_path.exists():
+        sys.exit(f"no catalog at {db_path} — run `python rag.py index` first")
+    probes_path = Path(args.probes)
+    if not probes_path.is_absolute():
+        probes_path = SCRIPT_DIR / probes_path
+    con = connect(db_path)
+    try:
+        n_warn = run_doctor(con, src, probes_path, verbose=not args.quiet)
+    finally:
+        con.close()
+    print(f"\n{n_warn} warning(s)." if n_warn else "\nall checks passed.")
+    if n_warn and args.strict:
+        sys.exit(1)
+
+
 def _probe_match(probe, row):
     """A result row satisfies a probe if every specified matcher matches."""
     if probe.get("book") and probe["book"] not in (row["book_file"] or ""):
@@ -1019,6 +1259,63 @@ def _first_hit_rank(con, ranked, probe, depth):
         if _probe_match(probe, row):
             return i
     return None
+
+
+def cmd_probes(args):
+    """Bootstrap a probe set from whatever corpus is present (spec 029).
+
+    The probe set can't be a committed fixture — it is inherently corpus-specific, and
+    a second user of this repo has an entirely different library — so instead of
+    shipping probes we ship the means to generate them. Each probe is a distinctive
+    sentence lifted from a page, matched back to that page by **image** (stable) rather
+    than book number (which renumbers as the library grows).
+    """
+    src, db_path = _resolve_db(args)
+    if not db_path.exists():
+        sys.exit(f"no catalog at {db_path} — run `python rag.py index` first")
+    out = Path(args.out)
+    if not out.is_absolute():
+        out = SCRIPT_DIR / out
+    if out.exists() and not args.force:
+        sys.exit(f"{out} exists — pass --force to overwrite (it is a throwaway file, "
+                 f"but overwriting loses hand-tuned probes)")
+
+    con = connect(db_path)
+    try:
+        # Term rarity over the indexed vocabulary: a good probe quotes a sentence that
+        # few other pages could answer.
+        con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_vocab "
+                    "USING fts5vocab(main, chunks_fts, 'row')")
+        cnt = dict(con.execute("SELECT term, cnt FROM temp.fts_vocab"))
+        # One page per book, spread across the library.
+        rows = con.execute(
+            "SELECT image, text, book_file FROM chunks WHERE image LIKE '%.jpeg' "
+            "AND length(text) > 600 GROUP BY book_file ORDER BY random()").fetchall()
+        probes = []
+        for image, text, book_file in rows:
+            best, best_score = None, 0.0
+            for sent in re.split(r"(?<=[.!?])\s+", text):
+                toks = _query_terms(sent)
+                if not 6 <= len(toks) <= 25:
+                    continue
+                # Rarest-terms-per-word: favours a sentence with specific vocabulary.
+                score = sum(1.0 / (1 + cnt.get(t, 0)) for t in toks) / len(toks)
+                if score > best_score:
+                    best, best_score = sent, score
+            if best:
+                probes.append({"query": re.sub(r"\s+", " ", best).strip()[:160],
+                               "image": image.rsplit(".", 1)[0]})
+            if len(probes) >= args.n:
+                break
+    finally:
+        con.close()
+
+    out.write_text(json.dumps(probes, ensure_ascii=False, indent=1) + "\n",
+                   encoding="utf-8")
+    print(f"wrote {len(probes)} probes → {out}")
+    print("These are verbatim sentences, so they flatter the lexical channel. Edit them "
+          "into paraphrases (how you would actually ask) for a meaningful score, and "
+          "delete any that are boilerplate. Then: python rag.py eval --verbose")
 
 
 def cmd_eval(args):
@@ -1082,6 +1379,28 @@ def cmd_eval(args):
         n = len(probes)
         recall = lambda rs, k: sum(1 for r in rs if r and r <= k) / n
         mrr = lambda rs: sum(1.0 / r for r in rs if r) / n
+
+        # Record when quality was last measured, and against how much corpus, so
+        # `doctor` can say "you grew 40 % since this number was true" (spec 029).
+        n_chunks = con.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        set_meta(con, "eval_chunks", n_chunks)
+        set_meta(con, "eval_at", datetime.datetime.now().isoformat(timespec="seconds"))
+        con.commit()
+        hist = Path(src) / EVAL_HISTORY
+        with hist.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "at": get_meta(con, "eval_at"),
+                "chunks": n_chunks,
+                "books": con.execute(
+                    "SELECT count(DISTINCT book_file) FROM chunks").fetchone()[0],
+                "probes": n,
+                "embed_model": model_name,
+                "rerank_model": args.rerank_model,
+                "scores": {m: {"r1": round(recall(ranks[m], 1), 3),
+                               "r3": round(recall(ranks[m], 3), 3),
+                               "r5": round(recall(ranks[m], 5), 3),
+                               "mrr": round(mrr(ranks[m]), 3)} for m in modes},
+            }, ensure_ascii=False) + "\n")
         print(f"\n{n} probes · depth {depth} · backend {args.backend} "
               f"· rerank {args.rerank_model}")
         print(f"{'mode':9} {'R@1':>6} {'R@3':>6} {'R@5':>6} {'MRR':>6}")
@@ -1089,6 +1408,14 @@ def cmd_eval(args):
             rs = ranks[m]
             print(f"{m:9} {recall(rs,1):6.2f} {recall(rs,3):6.2f} "
                   f"{recall(rs,5):6.2f} {mrr(rs):6.2f}")
+        # Drift is the signal quality decay actually shows up as; a single run can't
+        # show it, so compare against the previous entry in the history log.
+        prev = [json.loads(l) for l in hist.read_text(encoding="utf-8").splitlines() if l]
+        if len(prev) > 1 and prev[-2]["probes"] == n:
+            was, now = prev[-2]["scores"]["reranked"]["mrr"], prev[-1]["scores"]["reranked"]["mrr"]
+            if now < was - 0.02:
+                print(f"\n  ⚠ reranked MRR fell {was:.2f} → {now:.2f} since "
+                      f"{prev[-2]['at']} ({prev[-2]['chunks']} → {n_chunks} chunks)")
     finally:
         con.close()
 
@@ -1177,6 +1504,8 @@ def main():
     p_index.add_argument("--force", action="store_true",
                          help="rewrite every chunk and re-embed all")
     p_index.add_argument("--show", type=int, default=0, help="print N sample chunks")
+    p_index.add_argument("--no-check", dest="no_check", action="store_true",
+                         help="skip the post-index health check")
     p_index.set_defaults(func=cmd_index)
 
     p_search = sub.add_parser("search", help="retrieve citation-stamped passages")
@@ -1213,6 +1542,23 @@ def main():
     p_books.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
     p_books.set_defaults(func=cmd_books)
 
+    p_doc = sub.add_parser("doctor", help="check catalog invariants (coverage, scale, staleness)")
+    p_doc.add_argument("--probes", default="rag_probes.json", help="probe set to validate")
+    p_doc.add_argument("--quiet", action="store_true", help="print warnings only")
+    p_doc.add_argument("--strict", action="store_true", help="exit non-zero if any check warns")
+    p_doc.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
+    p_doc.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
+    p_doc.set_defaults(func=cmd_doctor)
+
+    p_probes = sub.add_parser("probes", help="bootstrap a probe set from this corpus")
+    p_probes.add_argument("--scaffold", action="store_true",
+                          help="generate probes (currently the only mode)")
+    p_probes.add_argument("-n", type=int, default=20, help="how many probes (default 20)")
+    p_probes.add_argument("--out", default="rag_probes.json", help="where to write")
+    p_probes.add_argument("--force", action="store_true", help="overwrite an existing probe set")
+    p_probes.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
+    p_probes.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
+    p_probes.set_defaults(func=cmd_probes)
 
     p_eval = sub.add_parser("eval", help="score dense/lexical/hybrid vs rag_probes.json")
     p_eval.add_argument("--probes", default="rag_probes.json", help="probe set (JSON list)")

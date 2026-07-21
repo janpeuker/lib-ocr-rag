@@ -40,6 +40,21 @@ themselves. Allow the network for one run only to fetch a *new* model:
 HF_HUB_OFFLINE=0 python rag.py index --embed-model some/other-model
 ```
 
+### Fill the directories
+
+Three folders ship empty (their contents are gitignored — your photos and books stay local):
+
+| Dir | You put | Notes |
+|---|---|---|
+| `in/` | **Your page photos**, straight off the phone (`*.jpeg`). Flat, no subfolders. | Several books at once is fine — grouping is inferred. Optional hint files live here too (see below). |
+| `out/` | *nothing* — everything here is generated | `book_*.md`, `report.md`, the `cache/`, and `rag.db`. Safe to delete to rebuild (you'll re-OCR). |
+| `test/` | OCR eval fixtures (`*.jpeg` + `*_text.txt`) | Only needed for `ocr.py eval`. |
+
+```bash
+cp ~/Pictures/book-shots/*.jpeg in/     # then:
+./library.sh update                     # OCR + index; resumable, safe to re-run
+```
+
 ### The easy way — `./library.sh`
 
 A tiny wrapper applies every setting (repo dir, venv, offline) so the `source .venv/…`
@@ -50,6 +65,7 @@ lines below can be skipped entirely:
 ./library.sh search "trade guilds and civic power" -k 3
 ./library.sh page IMG_1234 --neighbors 1
 ./library.sh books               # what the library holds
+./library.sh doctor              # health check (see Warnings below)
 ./library.sh ocr run in/IMG_x.jpeg      # raw passthrough to ocr.py / rag.py
 ```
 
@@ -125,7 +141,9 @@ All three only enrich output; grouping itself never depends on them.
 | `report.md` | The human entry point — every book with metadata, capture span, GPS centroid ± radius (wide = possible mis-group), key-image provenance, and a linked list of its page shots. Rewritten live as the run proceeds. |
 | `book_NN_<slug>.md` / `.txt` | One document per book: YAML metadata header + its pages. |
 | `index.md` | One row per image — type, rotation, assigned book, figure count, status (`ok` / `empty` / `no-fields` / `recovered`). Use it to audit grouping. |
+| `coverage.json` | Per shot: its text reached a book, **or a named reason why not**. `UNEXPLAINED` = a coverage hole. |
 | `instrument.jsonl` | One JSON line per image with cost + quality signals; append-only, survives resumes. An avg-per-image summary prints on stderr at the end. |
+| `rag.db`, `eval_history.jsonl` | The search catalog, and one scored line per `rag.py eval` run (quality drift over time). |
 
 Progress is one structured line per image on stderr —
 `[3/128] IMG_4360 → IMPRINT (book 4) 4.2s` (or `… (cached)` on resume). Every image's
@@ -178,6 +196,42 @@ run and are fused by rank (RRF), then a cross-encoder re-scores the top candidat
 
 Results are then shaped: one hit per page, capped per book, near-duplicates dropped. Phrase a
 query like the sentence you expect to find — the reranker rewards that over bare keywords.
+
+### Warnings
+
+`rag.py index` ends with a warn-only health check (`./library.sh doctor` for the full run,
+`--strict` to exit non-zero). It never blocks. Every check is relative to *your* corpus — there
+are no golden numbers, since no two libraries share content.
+
+| Warning | Means | Do |
+|---|---|---|
+| `uncitable-labels` | Chunks whose image isn't a real page file — broken citations. | A parser bug; report it. |
+| `empty-books` | A book file with no searchable text. | Usually a cover-only shot or a non-book photo. Ignore, or delete the photo. |
+| `vectors` | Windows unembedded, or embedded by a different model. | `rag.py index` |
+| `truncation` | Windows may exceed the embed model's context and be silently cut. | Lower `WINDOW_CHARS`. |
+| `scale` | The corpus outgrew the candidate pool `CANDIDATES` was tuned at. | Re-tune against `rag.py eval`, update `CANDIDATES_TUNED_AT`. Don't just widen the threshold. |
+| `probes` | Probe matchers resolve to nothing — stale, *not* a retrieval failure. | Fix them; prefer `image` over `book` (book numbers renumber as the library grows). |
+| `eval` | Corpus grew a lot since quality was last measured. | `rag.py eval` |
+| `ocr-rag-gap` | Pages written to books but not indexed. | `rag.py index` |
+| `duplicates` | *Info, not a warning.* A book read twice — normal. Already deduped at search time; fold with `in/merges.txt` if you care. | — |
+
+Coverage is audited on the OCR side too: every batch writes `out/coverage.json` saying, per
+shot, that its text reached a book **or a named reason why not**. Anything `UNEXPLAINED` is a
+hole — a page missing from search may be a coverage bug, not a ranking one.
+
+### Measuring quality
+
+`rag.py eval` scores each channel (recall@k / MRR) against a gitignored `rag_probes.json`, and
+appends every run to `out/eval_history.jsonl` so **drift** is visible — decay shows up over
+time, which one run can't show. Starting from scratch:
+
+```bash
+python rag.py probes --scaffold      # draw a starter probe set from your own corpus
+python rag.py eval --verbose
+```
+
+The scaffold lifts verbatim sentences, which flatter the lexical channel — paraphrase them
+into how you'd actually ask before trusting the numbers.
 
 ### Use it from another Claude project (`integration/`)
 
