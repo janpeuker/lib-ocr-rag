@@ -165,9 +165,10 @@ python rag.py index                             # chunk + embed out/book_*.md �
 python rag.py search "where does the author tie identity to a trade rather than a place"
 #   1. [7.02] Author, Title (2019) · IMG_1234 p.42
 #      …the guild held its charter without ever owning the land it worked…
-python rag.py search "the limits of sovereign immunity" -k 3 --book book_12
+python rag.py search "the limits of sovereign immunity" -k 3 --book "anghie"
 python rag.py get-page IMG_1234 --neighbors 1   # the page ± 1 neighbour, in full
 python rag.py books                             # what the library holds
+python rag.py books --book ingold               # …preview what a --book scope covers
 ```
 
 `index` is the *only* build command — first build and every refresh. It's cache-aware and
@@ -175,7 +176,14 @@ resumable, re-embedding only new/changed pages, so a re-index after a few new ph
 Flags for the exceptions: `--force` (re-embed everything — after changing `--embed-model`, or
 a corrupt DB), `--no-embed` (re-chunk only; lexical search keeps working).
 
-`search` flags: `-k N` · `--book <substr>` · `--per-book N` (cap per book, default 3) ·
+When you already know the source, scope with `--book`: it matches every word you give
+against the book's file name, title **and** author, so `--book ingold`, `--book "tim
+ingold"` or `--book "making anthropology"` all reach the same book — no need to look up
+its number. The scope is pushed into every retrieval channel, so the book's pages compete
+only with each other; when it resolves to a single book the `--per-book` cap is dropped
+(you asked for that book). `rag.py books --book X` previews what a scope covers.
+
+`search` flags: `-k N` · `--book <words>` · `--per-book N` (cap per book, default 3) ·
 `--mode hybrid|dense|lexical` · `--no-rerank` (faster, less precise) · `--min-score 0` ·
 `--json` (paste-ready citations *Author, Title (year) · IMG_x p.N*, plus an `image_path`
 back to the source photo).

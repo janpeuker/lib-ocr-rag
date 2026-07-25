@@ -99,7 +99,8 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   - `python rag.py search "<q>" [-k N] [--mode hybrid|dense|lexical] [--book S]
     [--per-book N] [--no-rerank] [--json]`
   - `python rag.py get-page IMG_x [--neighbors N] [--json]`
-  - `python rag.py books [--json]` — what the catalog holds (scope a `--book` filter)
+  - `python rag.py books [--book S] [--json]` — what the catalog holds (and what a
+    `--book` scope covers)
   - `python rag.py serve` — optional MCP stdio server (tools `search_library`/`get_page`).
 - **Catalog = source of truth.** `out/rag.db` (SQLite): chunks + a `windows` table
   holding the `float32` BLOB vectors + an FTS5 lexical table. No native vector type —
@@ -121,6 +122,14 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   by token **containment** (not Jaccard — duplicate-book twins split at different lengths
   and measured only 0.78). A bigger embedding model is *not* the fix for a relational
   query and was measured and deferred; see the 028 decision log before reaching for one.
+- **`--book` scopes by author/title/file, loosely** (spec 017 FR-009…012). Every word of the
+  scope must appear as a case-insensitive substring of `book_file || book_title || author`, so
+  `--book ingold` / `"tim ingold"` / `"making anthropology"` all reach the same book — this is
+  the operator for "I already know the source". It is pushed *into* each channel (FTS `MATCH` +
+  the vector matrix), never applied to their output, and the `--per-book` cap is dropped when
+  the scope resolves to one book. Don't add a query-side grammar (`author:X`, `+term`) on top —
+  that was considered and rejected in 017's decision log; a second syntax inside the query
+  would have to be stripped back out before the dense channel and the reranker see it.
 - **A missing result may be a coverage hole, not a ranking bug.** Before tuning
   retrieval, check the page is in the catalog at all — `out/coverage.json` (written by
   every `batch`) says, for every shot, either that its text reached a book or a *named

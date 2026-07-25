@@ -57,6 +57,16 @@ works from any working directory and that re-embeds only what changed.
   lazy-loaded only when a dense/hybrid query needs it.
 - **FR-008** Shared helpers `result_dict()` + `citation()` MUST back both the CLI and the MCP
   server (feature 018), so the two surfaces never drift.
+- **FR-009** `--book S` MUST scope by what the user *remembers* about the source: every
+  whitespace-separated word of `S` MUST appear (case-insensitively, as a substring) in the
+  book's `book_file`, `book_title` **or** `author` — so `ingold`, `tim ingold` and
+  `making anthropology` all reach the same book without knowing its catalog number.
+- **FR-010** The scope MUST be applied *inside* each retrieval channel (the FTS `MATCH` and the
+  vector matrix), never as a filter over their output, so a scoped search is not limited to
+  what the book won in the library-wide top-`CANDIDATES`.
+- **FR-011** When a scope resolves to exactly one book, the `--per-book` cap MUST NOT apply.
+- **FR-012** A scope matching **no** book MUST say so distinctly from "no results", and
+  `rag.py books [--book S]` MUST list a scope's books, so a scope can be checked before use.
 
 ### Key entities
 - **Search result** — `{ score, citation, book, author, year, image, page, book_file, text,
@@ -81,6 +91,23 @@ works from any working directory and that re-embeds only what changed.
   against the caller's cwd, so a Skill run from another project failed with "no catalog at
   out/rag.db"; now resolved against `SCRIPT_DIR`. (`get-page` human output bug also fixed: it
   must call `citation(row)`, not `row['citation']`.)
+- **`--book` matched the filename only (fixed).** The scope ran `book_file LIKE '%S%'`, and a
+  `book_file` is `book_86_making-anthropology-…md` — the author never appears in it. So
+  `--book ingold` returned **nothing** while `--book book_86` returned the same book's pages:
+  the one scoping operator only worked if you already knew the number you were trying to avoid
+  looking up. Matching file + title + author, word-by-word, is what users actually mean by "in
+  the Ingold book". Deliberately loose (substring, not token or fuzzy-distance): a scope is a
+  *filter you can inspect* — `books --book X` shows exactly what it covers — so over-matching
+  costs a visible extra book, while under-matching silently returns nothing. Query-side
+  operators (`author:X`, `+term`, `"phrase"`) were considered alongside and **rejected**: the
+  same intent is already expressible with a flag, and a second grammar inside the query string
+  would have to be stripped back out before the dense channel and the reranker ever see it.
+- **Scope before ranking, not after.** Post-filtering the channel outputs capped a scoped
+  search at whatever the book won in the global top-200 — for a book that is not the corpus's
+  loudest voice on a term, a fraction of its real hits, or none. Pushing the scope into the FTS
+  `MATCH` (via the UNINDEXED `id` column) and into the vector matrix costs nothing measurable at
+  this corpus size and makes the book's pages compete only with each other. Visible effect:
+  `--book ingold "correspondence"` went from 3 hits (per-book cap) to the book's full ranking.
 - **Eval result.** 5 content-grounded probes: dense MRR 0.77, lexical 0.90, hybrid 0.87 —
   headline is robustness: hybrid is the only mode with R@3=1.00 across both paraphrase and
   proper-noun probes (small set ⇒ MRR deltas noisy).

@@ -49,8 +49,8 @@ Flags:
 | Flag | Use |
 |---|---|
 | `-k N` | results (default 5). Use **10–15 for a survey** ("what does the library have on X"), 5 for a single citation. |
-| `--book <substr>` | restrict to one book, e.g. `--book book_A`. Get the substring from `books` — never guess a number. |
-| `--per-book N` | max results from one book (default 3). Use `0` when you *want* everything one book says. |
+| `--book <words>` | restrict by author/title/file — `--book ingold`, `--book "sea nomads"`. Every word must appear in one of the three. **Use it whenever the question names an author or title.** `books --book X` shows what a scope covers. |
+| `--per-book N` | max results from one book (default 3). Use `0` when you *want* everything one book says. Ignored when `--book` resolves to a single book. |
 | `--mode hybrid\|dense\|lexical` | default `hybrid`. `lexical` only for an exact phrase you know is on the page. |
 | `--no-rerank` | skip the cross-encoder (~2× faster, noticeably less precise). |
 | `--min-score 0` | drop the irrelevant tail — see scores below. |
@@ -77,11 +77,12 @@ Each JSON result has: `score`, `citation` (paste-ready), `book`, `author`, `year
 
 ```bash
 $RAG books            # file, title, author, year, page/chunk counts per book
+$RAG books --book ingold   # only the books a --book scope would cover
 $RAG books --json
 ```
 
-Use this to scope `--book`, to answer "what's in the library", or to check whether a
-book is there at all before searching for it.
+Use this to check a `--book` scope, to answer "what's in the library", or to check whether
+a book is there at all before searching for it.
 
 ## How to answer
 

@@ -572,16 +572,22 @@ def load_backend(name):
     raise SystemExit(f"backend '{name}' arrives in step 4 — use --backend numpy for now")
 
 
-def build_backend(con, name):
+def build_backend(con, name, scope=None):
     """Load cached window vectors from the catalog into the chosen backend.
 
     Returns (backend, win2chunk) — the backend ranks *windows*, and the map folds a
-    window hit back onto the page chunk that owns it (spec 028)."""
+    window hit back onto the page chunk that owns it (spec 028). A `scope` (set of
+    chunk ids) restricts the matrix to those pages *before* ranking, so a scoped
+    search competes only inside the scope."""
     import numpy as np
     rows = con.execute(
         "SELECT id, chunk_id, vec FROM windows WHERE vec IS NOT NULL").fetchall()
     if not rows:
         raise SystemExit("no embeddings — run `python rag.py index` first")
+    if scope is not None:
+        rows = [r for r in rows if r[1] in scope]
+        if not rows:
+            return load_backend(name), {}  # scope holds nothing embedded yet
     ids = [r[0] for r in rows]
     win2chunk = {r[0]: r[1] for r in rows}
     mat = np.vstack([np.frombuffer(r[2], np.float32) for r in rows])
@@ -613,8 +619,10 @@ def embed_query(model_name, query):
     return v.astype(np.float32)
 
 
-def dense_rank(con, query, model_name, backend_name, n):
-    backend, win2chunk = build_backend(con, backend_name)
+def dense_rank(con, query, model_name, backend_name, n, scope=None):
+    backend, win2chunk = build_backend(con, backend_name, scope)
+    if not win2chunk:
+        return []
     # Over-fetch windows: several of the top windows belong to the same page, so
     # n windows would pool down to fewer than n chunks.
     hits = backend.query(embed_query(model_name, query), n * 4)
@@ -632,21 +640,29 @@ def _fts_query(text):
     return " OR ".join(f'"{t}"' for t in _query_terms(text))
 
 
-def _fts_rank(con, fts_query, n):
+def _fts_rank(con, fts_query, n, scope=None):
     if not fts_query:
         return []
-    rows = con.execute(
-        "SELECT id, bm25(chunks_fts) AS s FROM chunks_fts "
-        "WHERE chunks_fts MATCH ? ORDER BY s LIMIT ?", (fts_query, n)).fetchall()
+    sql = ("SELECT id, bm25(chunks_fts) AS s FROM chunks_fts "
+           "WHERE chunks_fts MATCH ?")
+    params = [fts_query]
+    if scope is not None:
+        # `id` is an UNINDEXED FTS column, so this narrows the match set itself —
+        # the scope competes for the LIMIT instead of being filtered out after it.
+        if not scope:
+            return []
+        sql += f" AND id IN ({','.join('?' * len(scope))})"
+        params.extend(scope)
+    rows = con.execute(sql + " ORDER BY s LIMIT ?", params + [n]).fetchall()
     return [(r[0], -float(r[1])) for r in rows]  # negate bm25 so higher = better
 
 
-def lexical_rank(con, query, n):
+def lexical_rank(con, query, n, scope=None):
     """OR-of-terms BM25 — the recall channel."""
-    return _fts_rank(con, _fts_query(query), n)
+    return _fts_rank(con, _fts_query(query), n, scope)
 
 
-def coverage_rank(con, query, n):
+def coverage_rank(con, query, n, scope=None):
     """BM25 over pages containing *every* query term (spec 028).
 
     The OR channel is dominated by whichever terms are frequent in the corpus, so a
@@ -658,7 +674,7 @@ def coverage_rank(con, query, n):
     toks = _query_terms(query)
     if len(toks) < 2:
         return []  # identical to the OR channel for a single term
-    return _fts_rank(con, " AND ".join(f'"{t}"' for t in toks), n)
+    return _fts_rank(con, " AND ".join(f'"{t}"' for t in toks), n, scope)
 
 
 def _vocab(con):
@@ -673,7 +689,7 @@ def _vocab(con):
         (FUZZY_MIN_COUNT,))]
 
 
-def fuzzy_rank(con, query, n):
+def fuzzy_rank(con, query, n, scope=None):
     """BM25 over near-spellings of the query terms (spec 028).
 
     OCR'd proper nouns are the worst case for both other channels: the dense one
@@ -692,7 +708,8 @@ def fuzzy_rank(con, query, n):
         expanded.extend(variants or [t])
     if set(expanded) <= set(toks):
         return []  # nothing new — the other channels already cover this query
-    return _fts_rank(con, " OR ".join(f'"{t}"' for t in dict.fromkeys(expanded)), n)
+    return _fts_rank(con, " OR ".join(f'"{t}"' for t in dict.fromkeys(expanded)), n,
+                     scope)
 
 
 def rrf(rankings, k0=RRF_K0):
@@ -791,6 +808,41 @@ def diversify(con, ranked, k, per_book=PER_BOOK_DEFAULT, dup_ratio=DUP_RATIO):
     return out
 
 
+SCOPE_FIELDS = "(book_file || ' ' || COALESCE(book_title,'') || ' ' || COALESCE(author,''))"
+
+
+def scope_books(con, book):
+    """Books matching a `--book` scope: [(book_file, book_title, author), …].
+
+    Matched loosely on purpose — you scope by what you remember, not by the catalog's
+    filename. Each whitespace-separated word must appear *somewhere* in the book's
+    file name, title or author (LIKE is case-insensitive for ASCII), so `ingold`,
+    `tim ingold` and `making anthropology` all reach
+    `book_86_making-… / Making: Anthropology… / Ingold, Tim`, which the old
+    book_file-only match reached by its book number alone.
+    """
+    words = book.split()
+    if not words:
+        return []
+    where = " AND ".join(f"{SCOPE_FIELDS} LIKE ?" for _ in words)
+    return con.execute(
+        f"SELECT DISTINCT book_file, book_title, author FROM chunks WHERE {where} "
+        "ORDER BY book_file", [f"%{w}%" for w in words]).fetchall()
+
+
+def scope_ids(con, book):
+    """Chunk ids under a `--book` scope, or None when unscoped (an empty set means
+    the scope matched no book — distinct from 'no scope')."""
+    if not book:
+        return None
+    files = [r[0] for r in scope_books(con, book)]
+    if not files:
+        return set()
+    qs = ",".join("?" * len(files))
+    return {r[0] for r in con.execute(
+        f"SELECT id FROM chunks WHERE book_file IN ({qs})", files)}
+
+
 def search(con, query, mode, backend_name, k, book=None, rerank_model=None,
            per_book=PER_BOOK_DEFAULT):
     """Return [(id, score)] for the top-k chunks under the chosen retrieval mode.
@@ -798,21 +850,29 @@ def search(con, query, mode, backend_name, k, book=None, rerank_model=None,
     Pipeline (spec 028): channels → RRF fusion → cross-encoder rerank → diversify.
     `rerank_model=None` skips reranking (the pure-RRF path, and what `--mode dense`
     or `lexical` means when you want to inspect one channel).
+
+    A `book` scope is pushed *into* every channel rather than applied to their output:
+    filtering afterwards capped a scoped search at whatever the book won in the global
+    top-CANDIDATES, so a book that simply isn't the corpus's loudest voice on the query
+    returned a fraction of its pages, or none.
     """
     model_name = get_meta(con, "embed_model") or DEFAULT_EMBED_MODEL
+    scope = scope_ids(con, book)
+    if scope is not None and not scope:
+        return []
+    if book and len(scope_books(con, book)) == 1:
+        per_book = 0  # the cap exists to stop one book monopolising a library-wide
+                      # search; when you asked for that one book it just truncates
     rankings = []
     if mode in ("dense", "hybrid"):
-        rankings.append(dense_rank(con, query, model_name, backend_name, CANDIDATES))
+        rankings.append(dense_rank(con, query, model_name, backend_name, CANDIDATES,
+                                   scope))
     if mode in ("lexical", "hybrid"):
-        rankings.append(lexical_rank(con, query, CANDIDATES))
+        rankings.append(lexical_rank(con, query, CANDIDATES, scope))
     if mode == "hybrid":  # the precision channels only make sense alongside the others
-        rankings.append(coverage_rank(con, query, CANDIDATES))
-        rankings.append(fuzzy_rank(con, query, CANDIDATES))
+        rankings.append(coverage_rank(con, query, CANDIDATES, scope))
+        rankings.append(fuzzy_rank(con, query, CANDIDATES, scope))
     rankings = [r for r in rankings if r]
-    if book:
-        allowed = {r[0] for r in con.execute(
-            "SELECT id FROM chunks WHERE book_file LIKE ?", (f"%{book}%",))}
-        rankings = [[(i, s) for i, s in r if i in allowed] for r in rankings]
     if len(rankings) > 1:
         ranked = rrf(rankings)
     else:
@@ -1008,8 +1068,15 @@ def cmd_search(args):
             print(json.dumps(results, ensure_ascii=False, indent=2))
             return
         head = f'query: "{args.query}"  ·  mode={args.mode}  backend={args.backend}'
-        head += f"  ·  book~{args.book}" if args.book else ""
+        if args.book:
+            scoped = scope_books(con, args.book)
+            head += f"  ·  book~{args.book} ({len(scoped)} book"
+            head += "s)" if len(scoped) != 1 else ")"
         print(head)
+        if args.book and not scope_books(con, args.book):
+            print(f"  no book matches '{args.book}' — see `rag.py books --book "
+                  f"{args.book.split()[0]}`")
+            return
         if not results:
             print("  (no results)")
             return
@@ -1071,10 +1138,15 @@ def cmd_books(args):
         sys.exit(f"no catalog at {db_path} — run `python rag.py index` first")
     con = connect(db_path)
     try:
-        rows = con.execute(
-            "SELECT book_file, book_title, author, year, count(*) AS chunks, "
-            "       count(DISTINCT image) AS pages "
-            "FROM chunks GROUP BY book_file ORDER BY book_file").fetchall()
+        sql = ("SELECT book_file, book_title, author, year, count(*) AS chunks, "
+               "       count(DISTINCT image) AS pages FROM chunks ")
+        params = []
+        if args.book:  # same loose match as `search --book` — preview a scope here
+            sql += "WHERE " + " AND ".join(
+                f"{SCOPE_FIELDS} LIKE ?" for _ in args.book.split())
+            params = [f"%{w}%" for w in args.book.split()]
+        rows = con.execute(sql + "GROUP BY book_file ORDER BY book_file",
+                           params).fetchall()
         if args.json:
             print(json.dumps([{"book_file": b, "book": t, "author": a or None,
                                "year": y or None, "chunks": c, "pages": p}
@@ -1478,8 +1550,10 @@ def cmd_serve(args):
         Returns up to k results, each with a paste-ready `citation`, the book /
         author / image / page, and the full chunk `text` (quote it directly —
         no need to open the book file). `mode` is hybrid|dense|lexical; `book`
-        restricts to a book_file substring; `per_book` caps how many results any
-        one book may take (0 = no cap).
+        restricts to books whose file name, title or author contain every word of
+        it (e.g. "ingold", "sea nomads") — use it whenever you already know the
+        author or title; `per_book` caps how many results any one book may take
+        (0 = no cap; ignored when `book` resolves to a single book).
         """
         con = connect(db_path)
         con.row_factory = sqlite3.Row
@@ -1547,7 +1621,9 @@ def main():
                           default="hybrid", help="retrieval mode (default hybrid)")
     p_search.add_argument("--backend", default="numpy",
                           help="vector backend (numpy; faiss/duckdb in step 4)")
-    p_search.add_argument("--book", default="", help="restrict to book_file containing this")
+    p_search.add_argument("--book", default="",
+                          help="restrict to books whose file/title/author contain every "
+                               "word of this (e.g. 'ingold', 'sea nomads')")
     p_search.add_argument("--per-book", dest="per_book", type=int, default=PER_BOOK_DEFAULT,
                           help=f"max results from one book (default {PER_BOOK_DEFAULT}; 0 = no cap)")
     p_search.add_argument("--no-rerank", dest="no_rerank", action="store_true",
@@ -1573,6 +1649,9 @@ def main():
     p_page.set_defaults(func=cmd_get_page)
 
     p_books = sub.add_parser("books", help="list the books held in the catalog")
+    p_books.add_argument("--book", default="",
+                         help="show only books matching this scope (same match as "
+                              "`search --book`, so you can preview a scope)")
     p_books.add_argument("--json", action="store_true", help="emit JSON (for the Skill)")
     p_books.add_argument("--src", default=DEFAULT_SRC, help="dir holding rag.db (default: out)")
     p_books.add_argument("--db", default="", help="catalog path (default: <src>/rag.db)")
