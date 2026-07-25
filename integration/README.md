@@ -45,10 +45,12 @@ package in this install (already included in the `pyproject.toml` / `uv sync`).
 `.mcp.json`, **or** register it with one command:
 
 ```bash
-claude mcp add library-search --env HF_HUB_OFFLINE=1 -- \
+claude mcp add library-search -- \
   /ABSOLUTE/PATH/TO/lib-ocr-rag/.venv/bin/python \
   /ABSOLUTE/PATH/TO/lib-ocr-rag/rag.py serve
 ```
+
+No `--env` needed: `rag.py` applies `HF_HUB_OFFLINE=1` itself at import (spec 021).
 
 ---
 

@@ -25,8 +25,11 @@ returns a few citation-stamped page snippets (a few hundred tokens). The point i
 Throughout, `$RAG` stands for:
 
 ```bash
-HF_HUB_OFFLINE=1 /ABSOLUTE/PATH/TO/lib-ocr-rag/.venv/bin/python /ABSOLUTE/PATH/TO/lib-ocr-rag/rag.py
+/ABSOLUTE/PATH/TO/lib-ocr-rag/.venv/bin/python /ABSOLUTE/PATH/TO/lib-ocr-rag/rag.py
 ```
+
+No env setup: `rag.py` sets `HF_HUB_OFFLINE=1` itself at import, so every call is
+offline whatever the caller's environment.
 
 ## When to use
 
