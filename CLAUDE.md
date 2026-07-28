@@ -151,6 +151,11 @@ can look up citations without loading whole books. See `specs/016-rag-retrieval-
   the scope resolves to one book. Don't add a query-side grammar (`author:X`, `+term`) on top —
   that was considered and rejected in 017's decision log; a second syntax inside the query
   would have to be stripped back out before the dense channel and the reranker see it.
+  A scope matching **no** book is reported out-of-band, never by reshaping stdout:
+  `search --json` still prints a plain `[]` but writes `scope_miss_message()` to stderr and
+  exits `2` (`EXIT_SCOPE_MISS`); MCP `search_library` raises instead of returning `[]`. So an
+  empty JSON result with exit 2 means the scope is wrong (misremembered, or the book isn't
+  indexed yet) — not that the library is silent on the query (spec 017 FR-013).
 - **A missing result may be a coverage hole, not a ranking bug.** Before tuning
   retrieval, check the page is in the catalog at all — `out/coverage.json` (written by
   every `batch`) says, for every shot, either that its text reached a book or a *named

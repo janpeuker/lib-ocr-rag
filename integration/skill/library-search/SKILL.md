@@ -66,6 +66,12 @@ negative-scoring ones. Judge by score, not by position — or pass `--min-score 
 Each JSON result has: `score`, `citation` (paste-ready), `book`, `author`, `year`,
 `image`, `image_path`, `page`, `book_file`, `text` (the full chunk).
 
+**An empty `[]` with exit code 2 is not an empty library.** It means your `--book` scope
+matched no book at all (stderr says which scope, and suggests `books --book X`) — the
+name is misremembered, spelled differently in the catalog, or that book isn't indexed yet.
+Re-check with `$RAG books --book <word>` and retry, or drop the scope; do **not** report
+"the library has nothing on this". Exit 0 with `[]` is the real "no hits".
+
 ### Search well, not once
 
 - **Issue 2–3 differently-worded queries** for a topic before concluding the library

@@ -1047,6 +1047,15 @@ def cmd_index(args):
             print("  ok  all checks passed")
 
 
+EXIT_SCOPE_MISS = 2
+
+
+def scope_miss_message(book):
+    """The one wording for 'your `--book` scope matched no book'."""
+    return (f"no book matches '{book}' — see `rag.py books --book "
+            f"{book.split()[0]}`")
+
+
 def cmd_search(args):
     src, db_path = _resolve_db(args)
     if not db_path.exists():
@@ -1054,6 +1063,7 @@ def cmd_search(args):
     con = connect(db_path)
     con.row_factory = sqlite3.Row
     try:
+        scoped = scope_books(con, args.book) if args.book else None
         hits = search(con, args.query, args.mode, args.backend, args.k,
                       args.book or None,
                       None if args.no_rerank else args.rerank_model,
@@ -1064,19 +1074,27 @@ def cmd_search(args):
                 continue  # `-k` is a cap, not a quota — don't pad with non-answers
             row = con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
             results.append(result_dict(row, score))
+        # A scope that matched no book is a *different* answer from "no hits", and
+        # `--json` used to flatten both to `[]` — so an agent read a misremembered or
+        # not-yet-indexed scope as "the library has nothing on this". The reason goes
+        # to stderr and the exit code, never into stdout, so the JSON contract stays a
+        # plain list of results (spec 017 FR-012).
+        scope_miss = scoped is not None and not scoped
+        if scope_miss:
+            print(scope_miss_message(args.book), file=sys.stderr)
         if args.json:
             print(json.dumps(results, ensure_ascii=False, indent=2))
+            if scope_miss:
+                sys.exit(EXIT_SCOPE_MISS)
             return
         head = f'query: "{args.query}"  ·  mode={args.mode}  backend={args.backend}'
         if args.book:
-            scoped = scope_books(con, args.book)
             head += f"  ·  book~{args.book} ({len(scoped)} book"
             head += "s)" if len(scoped) != 1 else ")"
         print(head)
-        if args.book and not scope_books(con, args.book):
-            print(f"  no book matches '{args.book}' — see `rag.py books --book "
-                  f"{args.book.split()[0]}`")
-            return
+        if scope_miss:
+            print(f"  {scope_miss_message(args.book)}")
+            sys.exit(EXIT_SCOPE_MISS)
         if not results:
             print("  (no results)")
             return
@@ -1558,6 +1576,10 @@ def cmd_serve(args):
         con = connect(db_path)
         con.row_factory = sqlite3.Row
         try:
+            if book and not scope_books(con, book):
+                # No stderr or exit code on this surface — an empty list would read as
+                # "the library has nothing", so say it as a tool error instead.
+                raise ValueError(scope_miss_message(book))
             hits = search(con, query, mode, backend, k, book or None,
                           args.rerank_model, per_book)
             return [result_dict(con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone(),

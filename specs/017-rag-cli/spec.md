@@ -67,6 +67,11 @@ works from any working directory and that re-embeds only what changed.
 - **FR-011** When a scope resolves to exactly one book, the `--per-book` cap MUST NOT apply.
 - **FR-012** A scope matching **no** book MUST say so distinctly from "no results", and
   `rag.py books [--book S]` MUST list a scope's books, so a scope can be checked before use.
+- **FR-013** The distinction in FR-012 MUST reach the *machine* surfaces, not only the human
+  one: `search --json` MUST report a scope miss on **stderr** and exit `2` (`EXIT_SCOPE_MISS`)
+  while stdout stays a plain JSON list, and the MCP `search_library` tool MUST raise a tool
+  error carrying the same wording rather than returning `[]`. One helper
+  (`scope_miss_message()`) MUST provide that wording to all three surfaces.
 
 ### Key entities
 - **Search result** — `{ score, citation, book, author, year, image, page, book_file, text,
@@ -111,3 +116,14 @@ works from any working directory and that re-embeds only what changed.
 - **Eval result.** 5 content-grounded probes: dense MRR 0.77, lexical 0.90, hybrid 0.87 —
   headline is robustness: hybrid is the only mode with R@3=1.00 across both paraphrase and
   proper-noun probes (small set ⇒ MRR deltas noisy).
+- **A scope miss is a diagnosis, not an empty result (FR-013).** `--json` returned a bare `[]`
+  both when the scope matched no book *and* when it matched a book that had nothing to say —
+  and it returned before the human path's "no book matches" line, so the Skill and MCP (the
+  callers that always pass `--json`) could not tell the two apart. Symptom in the wild:
+  `search "pirate" --book "trocki"` read as "the library has nothing on pirates in Trocki"
+  when the real cause was a scope that resolved to zero books. Signalled out-of-band —
+  stderr + exit `2` — rather than by reshaping stdout: an object-on-miss (or a uniform
+  `{"results": …}` envelope) would make every consumer branch on shape for a case that is
+  already fully described by a channel agents can read. MCP has neither stderr nor an exit
+  code, so it raises instead; the wording is shared via `scope_miss_message()` so the three
+  surfaces can't drift (same motive as FR-008).
