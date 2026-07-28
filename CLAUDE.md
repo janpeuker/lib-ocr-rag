@@ -76,6 +76,27 @@ and drops handwritten annotations.
   re-OCR.
 - `IMG_3020` is the diagnostic page: a high score there means handwriting is being
   dropped. Pick the smallest model whose `IMG_3020` score is acceptable.
+- **A sparse, colourful mid-book page (a plate caption, a part-title divider) can look
+  exactly like a cover and false-split a book** (`detect_type`, spec 024 decision log).
+  Guarded by a real, structured folio: a `### Page N` heading with `N >= FOLIO_MIN` (4)
+  means dots.mocr read an actual page number off the shot, so it's never classified
+  COVER regardless of how short/colourful the text is. Deliberately narrower than "any
+  digit near the text" — a bare short digit line can be a publication year or shelf code
+  on a genuine cover, and dots.mocr defaults a real sparse cover to a phantom "Page 1"
+  (sometimes "Page 1"+"Page 2") even with nothing printed; both were measured false
+  positives during tuning. Only guards *future* batches at OCR time — an already-cached
+  false split needs its `type`/`role` fields reclassified from the stored `ocr_text`
+  (no re-OCR: `detect_type` is a pure function of text already on disk) before the next
+  `batch` picks up the new grouping; `merges.txt`/`titles.txt` remain the catch-all for
+  cases the folio guard can't foresee.
+- **Prefer an ISBN match to a title override when a book won't match Zotero.**
+  `match_ris` tries an exact ISBN match (`_book_isbn(book)` vs. each RIS record's `SN`)
+  before falling back to fuzzy title comparison. A `titles.txt` title override is just
+  one more candidate fed into that *same* fuzzy matcher, so it inherits the same
+  false-match risk from a generic/shared main title — worth double-checking the
+  bibliography (full-text search, not a narrow grep) for a matching ISBN before writing
+  a title override; see the spec 007 decision log for a case that looked unmatched but
+  wasn't.
 - **Vendored monkeypatch — revisit on every `mlx-vlm` bump.** `load_model()` applies
   `_patch_detokenizer_utf8()`, which works around a strict-UTF-8 decode bug in
   `mlx-vlm`'s (0.6.x, still unfixed as of 0.6.5) `BPEStreamingDetokenizer.add_token` (a stray byte mid-word, e.g.

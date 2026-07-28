@@ -486,9 +486,22 @@ def detect_type(text: str, img_path: str | None = None) -> str:
     has_marker = bool(IMPRINT_MARKERS.search(t))
     if has_marker:
         return "IMPRINT"
-    if nchars < COVER_TEXT_MAX:
+    # A real front cover never carries a printed folio: a sparse, colourful mid-book
+    # plate caption or a part-title divider (e.g. "Village pile-house under
+    # construction.", p.21; "AN OCEAN OF PEOPLES", p.15) can look exactly like a cover
+    # by text/colour alone, but if dots.mocr read a page number off it, it's a body
+    # page — never mistake it for a cover and split a new book there (spec 024 lesson).
+    # Two false-positive traps ruled out here: (1) page_numbers()'s loose bare-digit-line
+    # fallback catches a publication year or shelf code on an actual cover (measured:
+    # Sather's real cover misread "1997" as a folio) — only the structured "### Page N"
+    # heading counts; (2) dots.mocr defaults a genuinely sparse cover/half-title shot to
+    # "Page 1" (sometimes "Page 1"+"Page 2" for a cover+facing-page spread) — a folio
+    # has to clear FOLIO_MIN to count as real pagination, not that default.
+    FOLIO_MIN = 4
+    has_folio = any(int(n) >= FOLIO_MIN for n in re.findall(r"###\s*Page\s+(\d+)", t))
+    if nchars < COVER_TEXT_MAX and not has_folio:
         return "COVER"
-    if img_path and nchars < COVER_CEILING:
+    if img_path and nchars < COVER_CEILING and not has_folio:
         sparsity = 1.0 - nchars / COVER_CEILING
         if _image_colorfulness(img_path) * sparsity >= COVER_SCORE_MIN:
             return "COVER"
@@ -1811,7 +1824,18 @@ def match_ris(book, ris):
     pre-colon *main* titles (so a shared subtitle suffix like '… in the Malay World'
     can't cause a false match) AND the *full* titles (so a real match survives OCR
     dropping the subtitle colon — a run-on 'Across Oceans of Law The Komagata Maru …'
-    still matches its colon-bearing RIS entry). Returns the record or None (spec 026)."""
+    still matches its colon-bearing RIS entry). Returns the record or None (spec 026).
+
+    Tries an exact ISBN match first: it's the one signal immune to a garbled cover
+    title (fuzzy title matching can't help when the OCR title guess barely resembles
+    the real one) and immune to false positives from generic/shared main titles
+    (e.g. two different "Singapore: …" books) that fuzzy matching is exposed to."""
+    book_isbn = _book_isbn(book)
+    if book_isbn:
+        for r in ris:
+            if r["type"] in ("BOOK", "CHAP", "EDBOOK") and r.get("isbn") and \
+                    re.sub(r"[^\dXx]", "", r["isbn"]).upper() == book_isbn.upper():
+                return r
     queries = [book.get("title_override", ""), book_title(book),
                book.get("identity", ""), book.get("inferred_title", "")]
     raw = [q for q in queries if q and not q.startswith("Untitled (")]

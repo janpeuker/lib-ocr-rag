@@ -68,3 +68,18 @@ text, so the per-book document carries a usable citation header without me typin
   the report.
 - The **largest-font** refinement (§16) supersedes the reading-order `_cover_title` for shots
   classified COVER — split into feature 008 as its own story.
+- **`match_ris` now tries an exact ISBN match before fuzzy title matching (Jul 2026).**
+  Trocki's "Singapore: Wealth, Power and the Culture of Control" sat unmatched despite
+  its ISBN (0-415-26385-9) being both in the imprint OCR *and* the RIS `SN` field,
+  because `match_ris` only ever compared titles — and this book's cover OCR'd as
+  "Singapore us/strat eak to", nowhere near the 0.85 fuzzy threshold. `_book_isbn(book)`
+  (already used for the spec-025 imprint-ISBN split rule) is now checked against every
+  RIS record's normalized ISBN first; only falls through to fuzzy title matching if no
+  ISBN is present on either side. More robust than a `titles.txt` override for this
+  case: title overrides feed the *same* fuzzy matcher (as one more query candidate), so
+  a plausible-sounding override can still collide with an unrelated book sharing a
+  generic main title — exactly what happened when the first-draft override
+  `"Singapore: Wealth, Power..."` reduced to bare "Singapore" and false-matched Perry's
+  "Singapore: Unlikely Power" at 0.99. ISBN matching sidesteps both failure modes and
+  fills in full author/publisher/year/city from Zotero, so prefer it — reach for
+  `titles.txt` only when the book has no legible ISBN at all.
