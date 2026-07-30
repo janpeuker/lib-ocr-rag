@@ -56,6 +56,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 027 | [Body text recovery from cover/imprint shots](027-meta-shot-text-recovery/spec.md) | Delivered | — | — |
 | 028 | [Retrieval quality at 100+ books (windows · channels · rerank · diversity)](028-retrieval-quality/spec.md) | Delivered | — | — |
 | 029 | [Quality guards (coverage audit · catalog doctor · eval drift)](029-quality-guards/spec.md) | Delivered | — | — |
+| 030 | [Title-page book boundary (coverless books)](030-title-page-boundary/spec.md) | **Proposed** (exploration) | — | — |
 
 **Negative results & deferred work** live as lighter cards in
 [`specs/experiments/`](experiments/README.md) — features we tried and rejected/removed,
