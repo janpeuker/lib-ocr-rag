@@ -749,6 +749,29 @@ def _box_bottom(el) -> float:
     return float(bb[3]) if len(bb) == 4 else 0.0
 
 
+def _box_left(el) -> float:
+    bb = el.get("bbox") or []
+    return float(bb[0]) if len(bb) == 4 else 0.0
+
+
+def _box_right(el) -> float:
+    bb = el.get("bbox") or []
+    return float(bb[2]) if len(bb) == 4 else 0.0
+
+
+def _shares_column(el, left: float, right: float) -> bool:
+    """Does `el` sit in the same text column as the [left, right] title block?
+    A subtitle is set under its title, so the two overlap horizontally; a box on
+    the facing page of a spread does not overlap at all. Requires the overlap to
+    cover half the narrower box, so a brushing corner doesn't count."""
+    lo, hi = max(left, _box_left(el)), min(right, _box_right(el))
+    overlap = hi - lo
+    if overlap <= 0:
+        return False
+    narrower = min(right - left, _box_right(el) - _box_left(el))
+    return narrower <= 0 or overlap >= 0.5 * narrower
+
+
 def _el_text(el) -> str:
     return re.sub(r"\s+", " ", (el.get("text") or "").strip())
 
@@ -788,11 +811,17 @@ def _pick_cover_title(elements) -> str:
         return ""
     parts = [_el_text(el) for el in head]
     # subtitle: boxes strictly below the title, each within half a title-height of the
-    # one above it (a tight gap = same title block; a wide gap = author/series/imprint).
+    # one above it (a tight gap = same title block; a wide gap = author/series/imprint)
+    # AND in the title's own column. The column guard matters on a two-page shot: a
+    # title page facing a series list (Steinberg, IMG_8043 — title at x 996-1411, list
+    # at x 216-778) sits *vertically* just under the title, so a vertical-only scan
+    # swallowed the facing page and blew the joined string past _COVER_TITLE_MAXLEN,
+    # discarding an otherwise-perfect title. Same trap on a cover+facing-page spread.
     bottom = max(_box_bottom(el) for el in head)
+    left, right = min(_box_left(el) for el in head), max(_box_right(el) for el in head)
     below = sorted((el for el in elements
                     if el.get("category") in _COVER_SUBTITLE_CATS and _el_text(el)
-                    and _box_top(el) >= bottom),
+                    and _box_top(el) >= bottom and _shares_column(el, left, right)),
                    key=_box_top)
     for el in below:
         s = _el_text(el)
