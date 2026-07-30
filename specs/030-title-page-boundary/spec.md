@@ -4,6 +4,11 @@
 *The Social Construction of the Ocean* swallowed by Chew's *Fishermen in Flats*
 **Constitution:** IV, V, VI, VIII
 
+Second confirmed instance: **IMG_5148**, Sopher's *The Sea Nomads* swallowed by Cortesão's
+*Suma Oriental* (2026-07-30). It is not a second copy of the same case — it **defeats the
+FR-001 prefilter**, so no design in this spec would have caught it. See "IMG_5148: the
+prefilter is the binding constraint, not the gate".
+
 ## User Scenarios & Testing
 
 ### Primary user story
@@ -27,6 +32,11 @@ spec 006 and 024 deliberately guard against.
    carries a large body block, a title page does not.
 3. **Given** a corpus with no title-page shots, **when** `batch` runs, **then** grouping
    output is byte-identical to pre-030 (the detector is additive).
+3b. **Given** IMG_5148 (Sopher title page + colophon: rotated 90°, phantom `### Page 1`
+   folio, title on line 8 under the printer's imprint) mid-run inside *Suma Oriental*,
+   **when** `batch` groups shots, **then** a new book starts at IMG_5148 with title *The
+   Sea Nomads* — with no `! IMG_5148` hint present. **This is the acceptance test the
+   current design fails** (FR-014).
 4. **Given** an already-cached corpus, **when** `batch` runs after this ships, **then**
    the new field is backfilled one layout pass per *candidate* shot, resumably, with no
    re-transcription (mirrors the 008 `cover_title` backfill).
@@ -55,6 +65,13 @@ spec 006 and 024 deliberately guard against.
   text-only prefilter computable from the cached record alone: `role == "body"`, no
   parsed folio, a title-like first line, and short text. Measured selectivity on the
   present corpus: **109 of 3493 shots (3.1 %)**.
+- **FR-014** The prefilter MUST NOT require the title to be the shot's **first line**, and
+  MUST NOT reject a shot for carrying a parsed folio when that folio is the phantom `[1]`
+  dots.mocr stamps on sparse pages. Both clauses of FR-001 independently reject IMG_5148,
+  a true title page (measured — see the decision log). Candidate replacement: keep the
+  short-text and `role == "body"` clauses, and match the RIS gate (FR-009) against **every
+  line** of the shot rather than against `page_header` alone. The prefilter must be
+  re-measured for selectivity after any such widening; 3.1 % is the budget FR-002 assumes.
 - **FR-002** An eligible shot MUST pay at most one extra layout+text pass
   (`COVER_TITLE_PROMPT`, the 008 machinery), reusing the loaded model and the
   already-oriented image. Ineligible shots MUST pay nothing.
@@ -107,6 +124,8 @@ spec 006 and 024 deliberately guard against.
 
 ## Review & Acceptance Checklist
 - [ ] IMG_8043 splits automatically; `! IMG_8043` can be retired from `merges.txt`
+- [ ] IMG_5148 splits automatically (FR-014); `! IMG_5148` + `IMG_5148 + IMG_5165` retired
+- [ ] Prefilter selectivity re-measured after FR-014 widens it (3.1 % is FR-002's budget)
 - [ ] IMG_4946 / IMG_3709 / IMG_4454 / IMG_8639 / IMG_8044 / IMG_4800 / IMG_8079 do not split
 - [ ] Precision measured over all 109 candidates before wiring the grouper rule
 - [ ] Edited-volume behaviour decided (per-chapter title pages)
@@ -204,6 +223,57 @@ write by hand. It still outperforms the layout route on cost and corpus coverage
 makes FR-002/FR-003's layout pass a **corroborating second vote at best, not the primary
 detector**. But after user verification the honest score on the three "new" fires is
 **1 true (late) / 2 false** — the gate is a large improvement, not a solved problem.
+
+### IMG_5148: the prefilter is the binding constraint, not the gate (measured 2026-07-30)
+Sopher's *The Sea Nomads* (17 shots, IMG_5148–5164, incl. its whole table of contents) had
+been filed under Cortesão's *Suma Oriental* since January. The boundary signals are the same
+null set as IMG_8043 — 6.5 min gap, identical GPS, no ISBN (a 1965 book), no call-number
+change — so this spec's premise holds. What it adds is that **the RIS gate was never the
+problem here; the prefilter was.**
+
+IMG_5148 is a combined title page + colophon, shot at 90° (4 orient passes, 416 chars):
+
+```
+### Page 1
+Printed by Lim Bian Han, Government Printer, Singapore
+1965
+Price: $5 or 12s. 6d.
+Published by Authority
+...
+THE SEA NOMADS
+A STUDY BASED ON THE LITERATURE OF THE MARITIME BOAT PEOPLE OF SOUTHEAST ASIA
+DAVID E. SOPHER, A.B., M.A., Ph.D.
+MEMOIRS OF THE NATIONAL MUSEUM No. 5, 1965
+```
+
+Measured against the shipped code:
+
+| FR-001 clause | IMG_5148 | Verdict |
+|---|---|---|
+| `role == "body"` | `body` | passes |
+| short text | 416 chars | passes |
+| **no parsed folio** | `page_numbers: [1]` | **rejects** — phantom folio |
+| **title-like first line** | `page_header()` returns `''` | **rejects** — first line is `### Page 1`; the title is on line 8 |
+
+And yet FR-009 would have fired cleanly *if it had ever been reached*: `match_ris` scores
+`"THE SEA NOMADS"` → *The Sea Nomads: A Study of the Maritime Boat People of Southeast Asia*
+at **0.99** (main↔main), and the full run-on line scores 0.99 too. The gate was ready; the
+shot never became a candidate.
+
+Two lessons, both narrowing the design:
+- **The phantom `[1]` cuts both ways.** The decision log above cites it as the reason
+  `_page_reset` is gated (243 spurious fires). Here the *same* phantom disqualifies a true
+  title page. A folio clause can be a weak positive signal or a hard negative filter, not
+  both — FR-014 drops it as a filter.
+- **`page_header` is the wrong input to the RIS gate.** It reads the most common running
+  header / first line, which on a title page is whatever the printer set at the top —
+  here the colophon. The gate is cheap enough (stdlib `difflib`, whole corpus in seconds)
+  to run against **every line** of a short shot, which is what FR-014 proposes. This
+  costs nothing in GPU and reopens the selectivity question the sweep already answered
+  once; re-measure before wiring.
+
+Retired to `merges.txt` as `! IMG_5148` + `IMG_5148 + IMG_5165` in the meantime — the
+existing Sopher merge line seeded the book one shot late, at the IMG_5165 cover.
 
 ### Boundary placement — the detector fires *after* the true boundary
 The RIS gate finds the first page that *names* the book, which is not the page where the

@@ -64,6 +64,11 @@ retrieval quality decays far enough for me to notice it by hand.
   non-Latin text still exceed the cap at 600 chars and it cannot see them. It is a
   regression guard on `WINDOW_CHARS`, not a proof of no truncation.
 - Checks must never block a long overnight batch.
+- **Coverage accounting cannot see a mis-attribution.** `UNEXPLAINED` asks whether a shot's
+  text reached *a* book, not whether it reached the *right* one. A 73-shot foreign book
+  folded into another (spec 013's Mignolo case) leaves coverage at 100 % and every existing
+  check green. FR-010/FR-011 exist because "accounted for" and "correct" are different
+  questions, and only the first was being asked.
 
 ## Requirements
 
@@ -87,10 +92,27 @@ retrieval quality decays far enough for me to notice it by hand.
   is an image filename, so a page's own Markdown headings stay body text.
 - **FR-009** `library.sh` MUST expose `books`, `doctor` and `eval`, so the guards are
   reachable from the everyday wrapper.
+- **FR-010** `doctor` MUST add an **over-merge** check: a book whose meta shots'
+  `cover_title`s match two or more *distinct* RIS records is warned with the offending
+  images and the records they matched (spec 013 FR-007). Warn-only, like every other
+  check — a bound-together volume is a legitimate two-identity book. It MUST match on
+  confident RIS hits, not on raw string disagreement between cover titles: a book's spine
+  and title page routinely OCR differently and that is not a defect (measured — spec 013's
+  decision log).
+- **FR-011** `doctor` MUST add an **unattributed-books** check: books with no `author` and
+  no `year` after RIS matching, listed with the count of meta shots they hold. It
+  distinguishes the two causes, which need opposite fixes:
+  *no meta shot at all* ⇒ nothing to derive from, the book needs a Zotero record;
+  *meta shots present but unmatched* ⇒ the title or ISBN read is wrong, fix the read or
+  the bibliography. Warn-only and relative to the corpus (FR-003): an uncatalogued library
+  is a valid state, not an error.
 
 ### Key entities
 - **Coverage verdict** — `{image, type, role, reason, chars}`; `reason == ""` ⇒ emitted.
 - **Check** — `(level, name, message)` where level ∈ `ok | warn | info`.
+- **Over-merge** — one emitted book that is really two or more works; see spec 013.
+- **Unattributed book** — an emitted book with no author and no year; citable text under
+  an incomplete citation.
 
 ## Review & Acceptance Checklist
 - [x] `parse_book` heading bug fixed: 123 uncitable chunks → 0; hybrid R@1 .62 → .75
@@ -101,6 +123,9 @@ retrieval quality decays far enough for me to notice it by hand.
 - [x] `WINDOW_VERSION` bump rebuilt and re-embedded all 35 613 windows unprompted
 - [x] `probes --scaffold` produces image-keyed probes on this corpus
 - [x] Reranked MRR .81 unchanged after the window hard-cap
+- [ ] Over-merge check (FR-010) implemented; the ad-hoc sweep's 2 fires / 0 false positives
+      over 133 books reproduced by the shipped version
+- [ ] Unattributed-books check (FR-011) implemented and its two causes reported separately
 
 ## Decision log (non-normative)
 - **Why invariants, not fixtures.** The corpus is gitignored, so there is nothing to
@@ -130,3 +155,23 @@ retrieval quality decays far enough for me to notice it by hand.
   produced no change on re-index, because `content_sha` covers the page text and nothing
   covered the window logic. That is precisely the auto-invalidation Principle V requires,
   and its absence would have frozen every future chunking fix.
+- **The guards were watching the wrong layer (2026-07-30).** Three user-reported bugs were
+  diagnosed by hand this session; all three had been in the catalog for months with
+  `coverage.json` at 0 `UNEXPLAINED` and `doctor` green. Every existing check answers a
+  question about *plumbing* — did the text reach a chunk, is the vector fresh, is the
+  window truncated — and every one of the three bugs was about *attribution*: 17 Sopher
+  pages under Cortesão, 73 Tribal Communities pages under Mignolo, 16 Jumper pages with no
+  author or year. That is a class the guards were structurally unable to see, and the
+  cost is higher than a plumbing fault: a truncated window degrades a search result, a
+  mis-attributed page produces a **confident, correctly-formatted, wrong citation**.
+  FR-010/FR-011 are the cheapest checks that ask an attribution question, and the ad-hoc
+  version of FR-010 immediately found a fourth bug (Chou's cover IMG_5684 stranded in
+  Sopher) that no one had reported. That hit rate is the argument for shipping them.
+- **Neither new check would have caught the bug that motivated them, and that is the point
+  to keep in view.** Both lean on the RIS, so both inherit its coverage: FR-010 needs the
+  foreign book to have a `TI` record (Tribal Communities had only `T2` chapter entries),
+  and FR-011 is *itself* the report that the record is missing. They compose — FR-011 lists
+  the books whose Zotero records are absent, adding a record makes FR-010 able to see that
+  book — but only if the user acts on FR-011's list. A check whose recall depends on the
+  user maintaining the bibliography must say so in its own output, or it will be read as
+  an all-clear it cannot give.

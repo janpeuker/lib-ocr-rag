@@ -39,7 +39,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 010 | [**Bibliography** (RIS) + title-override hints](010-bibliography-title-hints/spec.md) | Delivered | `f0e5ebd` | §9, §15 |
 | 011 | [Capture **time + GPS** per-burst hint](011-burst-session-hint/spec.md) | Delivered | `76b43a9` | §9 |
 | 012 | [Cover **position** (leads or trails the burst)](012-cover-position-heuristic/spec.md) | Delivered | `c465e37` | §9.1 |
-| 013 | [Library-wide duplicate merge](013-duplicate-merge/spec.md) | Delivered | `ab7a77b` | §14 |
+| 013 | [Library-wide duplicate merge](013-duplicate-merge/spec.md) | Delivered · **over-merge guard (FR-007/008) proposed** | `ab7a77b` | §14 |
 | 014 | [Reporting + instrumentation](014-reporting-instrumentation/spec.md) | Delivered | `afd9849` | §8.1–§8.2 |
 | 015 | [Resumability + resilience](015-resumability-resilience/spec.md) | Delivered | `60a0e59`, `199e680`, `3f1c758` | §4, §13 |
 | 016 | [RAG retrieval engine (chunking · embeddings · numpy)](016-rag-retrieval-engine/spec.md) | Delivered | `8e590d0`, `83366cb`, `1d4298d` | §12.2–§12.6 |
@@ -55,7 +55,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 026 | [Metadata hygiene (full-title RIS match · CIP-boilerplate reject · runaway heal)](026-metadata-hygiene/spec.md) | Delivered | — | — |
 | 027 | [Body text recovery from cover/imprint shots](027-meta-shot-text-recovery/spec.md) | Delivered | — | — |
 | 028 | [Retrieval quality at 100+ books (windows · channels · rerank · diversity)](028-retrieval-quality/spec.md) | Delivered | — | — |
-| 029 | [Quality guards (coverage audit · catalog doctor · eval drift)](029-quality-guards/spec.md) | Delivered | — | — |
+| 029 | [Quality guards (coverage audit · catalog doctor · eval drift)](029-quality-guards/spec.md) | Delivered · **attribution checks (FR-010/011) proposed** | — | — |
 | 030 | [Title-page book boundary (coverless books)](030-title-page-boundary/spec.md) | **Proposed** (exploration) | — | — |
 
 **Negative results & deferred work** live as lighter cards in
