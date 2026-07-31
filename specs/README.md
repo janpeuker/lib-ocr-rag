@@ -52,7 +52,7 @@ font** (008), **bibliography** hints (010), the **cover-first-or-last** position
 | 023 | [Prompt-echo guard](023-prompt-echo-guard/spec.md) | Delivered | — | — |
 | 024 | [Book-split hint (`! IMG_x`)](024-book-split-hint/spec.md) | Delivered | — | — |
 | 025 | [Imprint-ISBN book boundary](025-imprint-isbn-split/spec.md) | Delivered | — | — |
-| 026 | [Metadata hygiene (full-title RIS match · CIP-boilerplate reject · runaway heal)](026-metadata-hygiene/spec.md) | Delivered | — | — |
+| 026 | [Metadata hygiene (full-title RIS match · CIP-boilerplate reject · runaway heal)](026-metadata-hygiene/spec.md) | Delivered · **+ containment guard & serial records (FR-005/006)** | — | — |
 | 027 | [Body text recovery from cover/imprint shots](027-meta-shot-text-recovery/spec.md) | Delivered | — | — |
 | 028 | [Retrieval quality at 100+ books (windows · channels · rerank · diversity)](028-retrieval-quality/spec.md) | Delivered | — | — |
 | 029 | [Quality guards (coverage audit · catalog doctor · eval drift)](029-quality-guards/spec.md) | Delivered · **attribution checks (FR-010/011) proposed** | — | — |

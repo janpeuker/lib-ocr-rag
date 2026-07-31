@@ -73,6 +73,17 @@ purely at emit time (re-runnable, no re-OCR, hints and cache untouched).
 - **FR-004** All three fixes MUST be pure over the cache and re-runnable: no re-OCR, no
   change to grouping, `PROMPT_VERSION`, or the cache (Principle VIII).
 
+- **FR-005** `sim`'s containment shortcut MUST NOT be gated on the 0.7 length ratio alone.
+  A shorter title fully contained in a longer one MUST also be accepted once it is
+  **≥ `_CONTAINMENT_MIN_CHARS` (20)** normalised characters — long enough to be specific
+  on its own. Rationale and the measurement that fixes the constant are in the decision
+  log; re-measure before lowering it.
+- **FR-006** The record filter MUST be a named predicate (`_is_citable`) used by **both**
+  the ISBN and the fuzzy path, and it MUST admit **journal-level serial records** —
+  `JOUR`/`SER` whose `TI == T2`. Article records MUST stay excluded: a library holds
+  hundreds, and a book's cover title fuzzy-matching an article title would attribute a
+  whole book to one paper's author. `load_ris` MUST therefore parse `T2` (`container`).
+
 ### Key entities
 - **Non-title** — a title candidate that is a generic section word (feature 010) or a
   CIP/copyright boilerplate line (this spec).
@@ -85,6 +96,45 @@ purely at emit time (re-runnable, no re-OCR, hints and cache untouched).
 - [x] Sather / Mawani / Bhandar fill author/year with no per-book override
 
 ## Decision log (non-normative)
+
+### Two matcher bugs found by auditing the corpus against the bibliography (2026-07-31)
+A user diff of "books with no author/year" against their Zotero export showed the list was
+mostly wrong: the records existed, `match_ris` could not reach them. Two independent causes,
+both measured over the whole corpus before fixing.
+
+**1. The 0.7 length guard rejects a true containment.** The OCR reads a cover's main title
+while Zotero carries the full subtitle, so the query is a clean substring that is simply much
+shorter:
+
+| OCR title | RIS record | contained | 0.7 guard | difflib |
+|---|---|---|---|---|
+| `A HISTORY OF SINGAPORE` (22) | *Seven hundred years : a history of Singapore* (42) | yes | **fails** (0.52) | 0.688 |
+| `The China Sea Directory Vol. I` (29) | *The China Sea Directory, vol. I. Containing…* (104) | yes | **fails** (0.28) | 0.436 |
+
+These were the two largest unattributed books in the corpus, 169 pp. FR-005 adds an absolute
+-length escape. **The constant is not a guess** — sweeping candidate values over all books:
+
+| `_CONTAINMENT_MIN_CHARS` | books changed | verdict |
+|---|---|---|
+| 16 | 5 | **breaks one**: `the power of maps` (17 ch) is contained in *Rethinking the Power of Maps*, flipping Wood's 1992 book onto the 2010 one |
+| **18 / 20** | **4** | all correct: Kwa, King's *China Sea Directory*, the JIA, and *Mapping the Unmappable?* |
+
+18 and 20 are indistinguishable in effect, so **20** ships — three characters of headroom over
+the measured false positive rather than one.
+
+**2. Serials were structurally unmatchable.** The filter admitted only `BOOK`/`CHAP`/`EDBOOK`,
+so a photographed journal run could never match however the user catalogued it — the *Journal
+of the Indian Archipelago* record (Earl & Logan, Mission Press, 1847) is `TY - JOUR` and was
+skipped before comparison. Simply admitting `JOUR` is unsafe: this library holds 105 article
+records, and a cover title fuzzy-matching an article would credit a whole book to one paper's
+author — the confident-wrong-citation failure spec 029 exists to prevent. FR-006's test is
+`TI == T2`, which distinguishes the run from a paper inside it and changed **exactly one book**
+when measured alone. Consequence worth stating: a serial the user holds only as articles still
+cannot match, and now *can* be made to match by adding one journal-level record.
+
+**Method note.** Both changes were simulated across all 128 books and diffed against current
+behaviour *before* being written to `ocr.py`. That is what caught the 16-character false
+positive, which no amount of reasoning about the constant would have surfaced.
 - **Why full↔full instead of loosening the main-title bar.** The main-title-only rule
   (010 FR-002) exists to stop a shared subtitle matching two different books. Rather than
   weaken it, we ADD a full-title comparison and take the max: a full match requires the

@@ -1803,6 +1803,7 @@ def load_ris(path) -> list:
             out.append({
                 "type": (r.get("TY") or [""])[0],
                 "title": ti,
+                "container": (r.get("T2") or [""])[0],   # journal/volume title (see _is_citable)
                 "authors": r.get("AU") or r.get("A1") or [],
                 "editors": r.get("A3") or r.get("A2") or r.get("ED") or [],
                 "year": (r.get("PY") or r.get("Y1") or [""])[0][:4],
@@ -1848,6 +1849,33 @@ def _is_nontitle(t: str) -> bool:
     return (not n) or n in _GENERIC_TITLES or bool(_BOILERPLATE_TITLE.search(t))
 
 
+# A contained-but-much-shorter title is trustworthy once it is long enough to be
+# specific on its own: the OCR reads a cover's main title while Zotero carries the full
+# subtitle ("A HISTORY OF SINGAPORE" inside "Seven hundred years : a history of
+# Singapore" is only 52 % of its length, so the 0.7 ratio guard alone rejects it).
+# Measured over the whole corpus 2026-07-31: 20 and 18 both recover exactly four books
+# (Kwa, King's China Sea Directory, the JIA, and "Mapping the Unmappable?") and break
+# none; **16 breaks one** — "the power of maps" (17 chars) is contained in "rethinking
+# the power of maps" and flips Wood's 1992 book onto the 2010 one. 20 keeps three
+# characters of headroom over that measured false positive. Re-measure before lowering.
+_CONTAINMENT_MIN_CHARS = 20
+
+
+def _is_citable(r) -> bool:
+    """Is this RIS record a whole work a photographed book could BE?
+
+    Books and chapters, plus **journal-level serial records** — a `JOUR`/`SER` entry
+    whose own title is its container title (`TI == T2`), which is how Zotero represents
+    the run itself rather than a paper inside it. Article records stay excluded on
+    purpose: a library holds hundreds of them, and letting a book's cover title fuzzy-
+    match an article title would attribute a whole book to a single paper's author.
+    Without this, a photographed journal run can never match (spec 013 decision log)."""
+    if r["type"] in ("BOOK", "CHAP", "EDBOOK"):
+        return True
+    return (r["type"] in ("JOUR", "SER") and bool(r.get("container"))
+            and _norm_title(r["title"]) == _norm_title(r["container"]))
+
+
 def match_ris(book, ris):
     """Best RIS book whose title matches one of this book's title guesses. Compares
     pre-colon *main* titles (so a shared subtitle suffix like '… in the Malay World'
@@ -1862,7 +1890,7 @@ def match_ris(book, ris):
     book_isbn = _book_isbn(book)
     if book_isbn:
         for r in ris:
-            if r["type"] in ("BOOK", "CHAP", "EDBOOK") and r.get("isbn") and \
+            if _is_citable(r) and r.get("isbn") and \
                     re.sub(r"[^\dXx]", "", r["isbn"]).upper() == book_isbn.upper():
                 return r
     queries = [book.get("title_override", ""), book_title(book),
@@ -1877,12 +1905,13 @@ def match_ris(book, ris):
         if len(t) < 6:
             return 0.0
         contained = ((q in t or t in q)
-                     and min(len(q), len(t)) >= 0.7 * max(len(q), len(t)))
+                     and (min(len(q), len(t)) >= 0.7 * max(len(q), len(t))
+                          or min(len(q), len(t)) >= _CONTAINMENT_MIN_CHARS))
         return 0.99 if contained else difflib.SequenceMatcher(None, q, t).ratio()
 
     best, best_score = None, 0.0
     for r in ris:
-        if r["type"] not in ("BOOK", "CHAP", "EDBOOK"):
+        if not _is_citable(r):
             continue
         rmain, rfull = _norm_title(_main_title(r["title"])), _norm_title(r["title"])
         for qmain, qfull in pairs:
