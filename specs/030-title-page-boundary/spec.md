@@ -1,11 +1,11 @@
 # Feature 030 — Title-page book boundary (coverless books)
 
-**Status:** Proposed (exploration — not implemented) · **Origin:** IMG_8043, Steinberg's
-*The Social Construction of the Ocean* swallowed by Chew's *Fishermen in Flats*
+**Status:** Proposed (exploration — not implemented) · **Origin:** IMG_8043, Author-G's
+*Book-AG* swallowed by Author-AK's *Book-AH*
 **Constitution:** IV, V, VI, VIII
 
-Second confirmed instance: **IMG_5148**, Sopher's *The Sea Nomads* swallowed by Cortesão's
-*Suma Oriental* (2026-07-30). It is not a second copy of the same case — it **defeats the
+Second confirmed instance: **IMG_5148**, Author-C's *Book-E* swallowed by Author-P's
+*Book-O* (2026-07-30). It is not a second copy of the same case — it **defeats the
 FR-001 prefilter**, so no design in this spec would have caught it. See "IMG_5148: the
 prefilter is the binding constraint, not the gate".
 
@@ -23,19 +23,19 @@ open a new book there, without re-introducing the chapter-header false splits th
 spec 006 and 024 deliberately guard against.
 
 ### Acceptance scenarios
-1. **Given** IMG_8043 (Steinberg title page: one `Title` box, a facing series list, no
+1. **Given** IMG_8043 (Author-G title page: one `Title` box, a facing series list, no
    folio) mid-run inside a cover-anchored book, **when** `batch` groups shots, **then** a
-   new book starts at IMG_8043 with title *The Social Construction of the Ocean* — with
+   new book starts at IMG_8043 with title *Book-AG* — with
    no `! IMG_8043` hint present.
 2. **Given** a chapter opener whose heading is set large (IMG_4946, IMG_3709, IMG_4454),
    **when** `batch` groups shots, **then** no new book starts — a chapter opener always
    carries a large body block, a title page does not.
 3. **Given** a corpus with no title-page shots, **when** `batch` runs, **then** grouping
    output is byte-identical to pre-030 (the detector is additive).
-3b. **Given** IMG_5148 (Sopher title page + colophon: rotated 90°, phantom `### Page 1`
-   folio, title on line 8 under the printer's imprint) mid-run inside *Suma Oriental*,
-   **when** `batch` groups shots, **then** a new book starts at IMG_5148 with title *The
-   Sea Nomads* — with no `! IMG_5148` hint present. **This is the acceptance test the
+3b. **Given** IMG_5148 (Author-C title page + colophon: rotated 90°, phantom `### Page 1`
+   folio, title on line 8 under the printer's imprint) mid-run inside *Book-O*,
+   **when** `batch` groups shots, **then** a new book starts at IMG_5148 with title
+   *Book-E* — with no `! IMG_5148` hint present. **This is the acceptance test the
    current design fails** (FR-014).
 4. **Given** an already-cached corpus, **when** `batch` runs after this ships, **then**
    the new field is backfilled one layout pass per *candidate* shot, resumably, with no
@@ -44,12 +44,12 @@ spec 006 and 024 deliberately guard against.
    grouping runs, **then** the human hint wins (VIII).
 
 ### Edge cases
-- A **journal issue front** (IMG_5098, *SOJOURN*) satisfies the same test. That is
+- A **journal issue front** (IMG_5098, *Book-AJ*) satisfies the same test. That is
   arguably correct — it *is* a new bibliographic item — but it changes how periodical
   runs group; decide deliberately rather than discovering it in `report.md`.
 - An **edited volume** that sets a full title page before every contribution would split
-  into one book per chapter. **Measured and real**: IMG_4951 (Annelise Riles' chapter in
-  *Laws of the Postcolonial*) satisfies FR-003 — its body is broken into an epigraph plus
+  into one book per chapter. **Measured and real**: IMG_4951 (a contributor's chapter in
+  *Book-R*) satisfies FR-003 — its body is broken into an epigraph plus
   several small `Text` boxes, so no body block outgrows the title. FR-009's bibliography
   gate rejects it (0.52); the layout test alone does not.
 - A **half-title** page (title only, no author/publisher) may satisfy the test and open
@@ -99,13 +99,14 @@ spec 006 and 024 deliberately guard against.
   coverage, and a book absent from the bibliography MUST fail silently, never guess.
 - **FR-011** The RIS gate MUST NOT accept a **containment** match between a section title
   and the book title that contains it. Confirmed against the physical book: IMG_4078
-  ("TOWARD A FORENSIC ARCHITECTURE") and IMG_4089 ("FORENSIS") both score 0.99 against
-  Weizman's *Forensic Architecture* / *Forensis* and are both **sections of one correctly
+  (a section title containing the book title) and IMG_4089 (a one-word section title) both
+  score 0.99 against
+  Author-B's *Book-B* / *Book-C* and are both **sections of one correctly
   grouped book**. `sim`'s containment shortcut needs a stricter rule here than `match_ris`
   uses for labelling — a wrong label is cosmetic, a wrong split shatters a book.
 - **FR-012** A fired boundary MUST attach the book's preceding **front matter** — the
   folio-less shots between the previous book's last true page and the fire point — rather
-  than splitting at the fire point alone. Measured need: *Weaponizing Maps* fires at
+  than splitting at the fire point alone. Measured need: *Book-AI* fires at
   IMG_3108 but starts at IMG_3105, stranding IMG_3106–3107.
 - **FR-013** Where a book's opening shot is a **multi-book pile/shelf photo** (IMG_3105
   reads six titles at once), the detector MUST NOT attempt to name the book from it. Such
@@ -129,15 +130,15 @@ spec 006 and 024 deliberately guard against.
 - [ ] IMG_4946 / IMG_3709 / IMG_4454 / IMG_8639 / IMG_8044 / IMG_4800 / IMG_8079 do not split
 - [ ] Precision measured over all 109 candidates before wiring the grouper rule
 - [ ] Edited-volume behaviour decided (per-chapter title pages)
-- [ ] IMG_4078 / IMG_4089 do **not** split Weizman's *Forensic Architecture* (FR-011)
-- [ ] *Weaponizing Maps* starts at IMG_3105, not IMG_3108 (FR-012/FR-013)
+- [ ] IMG_4078 / IMG_4089 do **not** split Author-B's *Book-B* (FR-011)
+- [ ] *Book-AI* starts at IMG_3105, not IMG_3108 (FR-012/FR-013)
 - [ ] Backfill resumable; `batch` on an unchanged corpus is a no-op
 - [ ] Hints still win
 
 ## Decision log (non-normative)
 
 ### The failure (measured, 2026-07-30)
-`page_header(IMG_8043)` already returns `'The Social Construction of the Ocean'` — the
+`page_header(IMG_8043)` already returns Book-AG's exact title — the
 title was never lost. The gap is in `group_images`: every title-driven boundary rule
 (rule 1, rule 1b) requires `role == "meta"`, and the one body-side rule (rule 4) requires
 `_page_reset`, which returns `False` because a title page carries **no folio at all**.
@@ -166,8 +167,8 @@ it **inverts**. Layout passes over the target and its eight nearest confusables:
 
 | Shot | What it is | Tallest box | Title box? | Naive dominance ratio |
 |---|---|---|---|---|
-| **IMG_8043** | **Steinberg title page** | **Title, h96** | **yes** | **2.0** |
-| IMG_5098 | *SOJOURN* journal front | Title, h175 | yes | 7.6 |
+| **IMG_8043** | **Author-G title page** | **Title, h96** | **yes** | **2.0** |
+| IMG_5098 | *Book-AJ* journal front | Title, h175 | yes | 7.6 |
 | IMG_4946 | chapter opener | Text, h463 | yes | 4.3 |
 | IMG_3709 | chapter opener | Text, h993 | no | 2.9 |
 | IMG_8639 | contents | Table, h756 | no | 4.2 |
@@ -189,9 +190,9 @@ All **109** prefilter candidates were run through the layout pass (~1 min/shot, 
 
 | Shot | What it is | Verdict |
 |---|---|---|
-| IMG_8043 | Steinberg title page | true positive (the target) |
-| IMG_4951 | chapter in *Laws of the Postcolonial* | **false positive** |
-| IMG_5098 | *SOJOURN* journal front, inside another book | **false positive** |
+| IMG_8043 | Author-G title page | true positive (the target) |
+| IMG_4951 | chapter in *Book-R* | **false positive** |
+| IMG_5098 | *Book-AJ* journal front, inside another book | **false positive** |
 
 **1 hit / 2 false positives for ~2 GPU-hours.** The bibliography gate (below) keeps the
 hit and rejects both misses for free, which is why FR-009 leads the design and FR-003 is
@@ -208,13 +209,13 @@ bibliography**, since a chapter would not be. Measured over the full 3493-shot c
 
 | Shot | OCR title | RIS score | Outcome |
 |---|---|---|---|
-| IMG_8043 | The Social Construction of the Ocean | **0.99** | the target — fires |
-| IMG_7606 | The Orang Suku Laut of Riau, Indonesia | **0.99** | independently reproduces the existing `! IMG_7606` hint |
-| IMG_3108 | WEAPONIZING MAPS | 0.99 | **true boundary, 3 shots late** — see "boundary placement" below |
-| IMG_4078 / IMG_4089 | TOWARD A FORENSIC ARCHITECTURE / FORENSIS | 0.99 | **FALSE POSITIVES** (user-confirmed): both are sections *inside* Weizman's *Forensic Architecture*, a correctly grouped and correctly titled book. This is FR-011's containment hazard, confirmed |
-| IMG_4951 | The View from the International Plane… | **0.52** | the layout route's false positive — **rejected** |
-| IMG_4946 | Francisco de Vitoria and the Colonial Origins… | 0.61 | chapter — rejected |
-| IMG_5098 | SOJOURN | 0.47 | journal front — rejected (resolves that edge case too) |
+| IMG_8043 | *Book-AG* | **0.99** | the target — fires |
+| IMG_7606 | *Book-AK* | **0.99** | independently reproduces the existing `! IMG_7606` hint |
+| IMG_3108 | *Book-AI* | 0.99 | **true boundary, 3 shots late** — see "boundary placement" below |
+| IMG_4078 / IMG_4089 | two section titles | 0.99 | **FALSE POSITIVES** (user-confirmed): both are sections *inside* Author-B's *Book-B*, a correctly grouped and correctly titled book. This is FR-011's containment hazard, confirmed |
+| IMG_4951 | a chapter title | **0.52** | the layout route's false positive — **rejected** |
+| IMG_4946 | a chapter title | 0.61 | chapter — rejected |
+| IMG_5098 | *Book-AJ* | 0.47 | journal front — rejected (resolves that edge case too) |
 | IMG_3656, IMG_3012, IMG_6661, IMG_6677 | — | 0.99 | suppressed by FR-005: title already equals the book's own identity |
 
 Nine raw fires, four suppressed by the identity check, **zero chapter-opener false
@@ -225,8 +226,8 @@ detector**. But after user verification the honest score on the three "new" fire
 **1 true (late) / 2 false** — the gate is a large improvement, not a solved problem.
 
 ### IMG_5148: the prefilter is the binding constraint, not the gate (measured 2026-07-30)
-Sopher's *The Sea Nomads* (17 shots, IMG_5148–5164, incl. its whole table of contents) had
-been filed under Cortesão's *Suma Oriental* since January. The boundary signals are the same
+Author-C's *Book-E* (17 shots, IMG_5148–5164, incl. its whole table of contents) had
+been filed under Author-P's *Book-O* since January. The boundary signals are the same
 null set as IMG_8043 — 6.5 min gap, identical GPS, no ISBN (a 1965 book), no call-number
 change — so this spec's premise holds. What it adds is that **the RIS gate was never the
 problem here; the prefilter was.**
@@ -240,10 +241,10 @@ Printed by Lim Bian Han, Government Printer, Singapore
 Price: $5 or 12s. 6d.
 Published by Authority
 ...
-THE SEA NOMADS
-A STUDY BASED ON THE LITERATURE OF THE MARITIME BOAT PEOPLE OF SOUTHEAST ASIA
-DAVID E. SOPHER, A.B., M.A., Ph.D.
-MEMOIRS OF THE NATIONAL MUSEUM No. 5, 1965
+<BOOK-E TITLE>
+<its long descriptive subtitle>
+<AUTHOR-C, with post-nominals>
+<series/museum memoir line>, 1965
 ```
 
 Measured against the shipped code:
@@ -256,7 +257,7 @@ Measured against the shipped code:
 | **title-like first line** | `page_header()` returns `''` | **rejects** — first line is `### Page 1`; the title is on line 8 |
 
 And yet FR-009 would have fired cleanly *if it had ever been reached*: `match_ris` scores
-`"THE SEA NOMADS"` → *The Sea Nomads: A Study of the Maritime Boat People of Southeast Asia*
+Book-E's cover title → its full RIS title (with subtitle)
 at **0.99** (main↔main), and the full run-on line scores 0.99 too. The gate was ready; the
 shot never became a candidate.
 
@@ -273,34 +274,34 @@ Two lessons, both narrowing the design:
   once; re-measure before wiring.
 
 Retired to `merges.txt` as `! IMG_5148` + `IMG_5148 + IMG_5165` in the meantime — the
-existing Sopher merge line seeded the book one shot late, at the IMG_5165 cover.
+existing Book-E merge line seeded the book one shot late, at the IMG_5165 cover.
 
 ### Boundary placement — the detector fires *after* the true boundary
 The RIS gate finds the first page that *names* the book, which is not the page where the
-book starts. *Weaponizing Maps* really begins at **IMG_3105**, a pile-of-spines photo
-reading six books at once (*The Power of Maps*, *Hollow Land*, *Rethinking the Power of
-Maps*, *The Lost Tribes of Tierra del Fuego*, and a truncated "Joe Bryan and Denis…") —
+book starts. *Book-AI* really begins at **IMG_3105**, a pile-of-spines photo
+reading six books at once (*Book-AD*, *Book-D*, *Book-AA*, a fifth title, and a
+truncated author byline) —
 928 chars, so `detect_type` rightly calls it PAGE, not COVER. The detector instead fires
-at IMG_3108, leaving IMG_3106 (narrative TOC) and IMG_3107 (Chapter 5) filed under Wood.
+at IMG_3108, leaving IMG_3106 (narrative TOC) and IMG_3107 (Chapter 5) filed under Author-Q.
 A split-at-the-fire-point rule is therefore **right about the book and wrong about three
 pages**. Any shipped version needs the retroactive front-matter attachment of option 3,
 or it trades one mis-attribution for a smaller one.
 
 ### Adjacent bug found while verifying (candidate for its own spec)
-Weizman's *Forensic Architecture* has **two** meta shots, both correctly typed COVER:
+Author-B's *Book-B* has **two** meta shots, both correctly typed COVER:
 
 ```
-IMG_4072  spine       cover_title='Zone Books Eyal Weizman Music Architecture'   (garbled)
-IMG_4073  title page  cover_title='Forensic Architecture VIOLENCE AT THE THRESHOLD…' (clean)
+IMG_4072  spine       cover_title='<publisher> Author-B <two stray cover words>'  (garbled)
+IMG_4073  title page  cover_title='<Book-B title + subtitle>'                       (clean)
 ```
 
 `book_title` step 1 takes the **earliest** cover by capture time (`ocr.py:1736`) — a
 deliberate guard so a mid-book page misread as COVER cannot outrank the real cover. When
 the user photographs the **spine first**, that guard picks the garbled read. Here
 `identity` still resolved correctly, the Zotero match rescued the emitted title
-(`book_96_forensic-architecture-violence-at-the-th.md`), **and the user had already paid
-for it by hand** — `titles.txt:12`, `IMG_4075 = Forensic Architecture # cover OCR'd as
-"Zone Books Eyal Weizman Music Architecture"`. A manual override standing in for a
+(`book_96_…`), **and the user had already paid
+for it by hand** — `titles.txt:12`, `IMG_4075 = <Book-B title> # cover OCR'd as the
+garbled spine string`. A manual override standing in for a
 ranking rule is the measure of the cost. So nothing is visibly broken —
 but an uncatalogued book in this shape would be filed under its garbled spine. The user's
 framing is right ("a spine should count as good as a cover if there is no cover"); the

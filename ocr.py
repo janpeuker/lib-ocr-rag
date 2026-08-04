@@ -493,7 +493,7 @@ def detect_type(text: str, img_path: str | None = None) -> str:
     # page — never mistake it for a cover and split a new book there (spec 024 lesson).
     # Two false-positive traps ruled out here: (1) page_numbers()'s loose bare-digit-line
     # fallback catches a publication year or shelf code on an actual cover (measured:
-    # Sather's real cover misread "1997" as a folio) — only the structured "### Page N"
+    # Author-D's real cover misread "1997" as a folio) — only the structured "### Page N"
     # heading counts; (2) dots.mocr defaults a genuinely sparse cover/half-title shot to
     # "Page 1" (sometimes "Page 1"+"Page 2" for a cover+facing-page spread) — a folio
     # has to clear FOLIO_MIN to count as real pagination, not that default.
@@ -707,7 +707,7 @@ def layout_figures(model, processor, config, img_path) -> int:
 # "Bahasa Mah Meri"), we return "" and let the reading-order text heuristic run —
 # picking the next-largest *text* box would just resurface the author/publisher.
 _COVER_TITLE_FONT_RATIO = 0.55   # join Title boxes within this fraction of the tallest
-                                 # (a wrapped title: "Tribal Communities" / "in the Malay World")
+                                 # (a wrapped title split across two lines)
 _COVER_SUBTITLE_GAP_RATIO = 0.8  # a subtitle hugs the title: the gap above it is under this
                                  # fraction of its own line height; the author/imprint sits farther
 _COVER_SUBTITLE_MAXLINES = 2     # at most this many boxes absorbed as a subtitle
@@ -813,7 +813,7 @@ def _pick_cover_title(elements) -> str:
     # subtitle: boxes strictly below the title, each within half a title-height of the
     # one above it (a tight gap = same title block; a wide gap = author/series/imprint)
     # AND in the title's own column. The column guard matters on a two-page shot: a
-    # title page facing a series list (Steinberg, IMG_8043 — title at x 996-1411, list
+    # title page facing a series list (Author-G, IMG_8043 — title at x 996-1411, list
     # at x 216-778) sits *vertically* just under the title, so a vertical-only scan
     # swallowed the facing page and blew the joined string past _COVER_TITLE_MAXLEN,
     # discarding an otherwise-perfect title. Same trap on a cover+facing-page spread.
@@ -1038,7 +1038,7 @@ def _cover_title(text: str) -> str:
     a "### Page N" folio and may emit a call-number/ISBN/slip line above the title; we
     skip that leading noise (anything not title-like), then take the first run of
     consecutive title-like lines — joining a title that wraps across lines (e.g.
-    "THE ECONOMIC HISTORY" / "OF SINGAPORE") and stopping at the blank line that
+    a two-line all-caps title) and stopping at the blank line that
     separates the title from the author/imprint block. "" if no title-like line."""
     parts = []
     for line in text.splitlines():
@@ -1080,17 +1080,17 @@ def page_header(rec) -> str:
 
 def _hdr_match(a: str, b: str) -> bool:
     """Fuzzy equality of two title-like strings (same book). Containment counts as
-    a match so a short cover title ("Tribal Communities") binds to the longer CIP
-    title with subtitle ("Tribal Communities in the Malay World: …")."""
+    a match so a short cover title binds to the longer CIP
+    title with subtitle."""
     if not (a and b):
         return False
     na, nb = normalize(a), normalize(b)
     if len(na) >= 6 and len(nb) >= 6:
         short, lng = (na, nb) if len(na) <= len(nb) else (nb, na)
-        # containment must land on word boundaries, so a cover title ("Tribal
-        # Communities") still binds to its longer CIP form ("Tribal Communities in
-        # the Malay World") but a bare word does NOT match a different title that
-        # merely embeds it ("Singapore" ⊄ "Leluhur Singapore's Kampong Gelam").
+        # containment must land on word boundaries, so a cover title (a short
+        # main title) still binds to its longer CIP form (the same title plus its
+        # subtitle) but a bare word does NOT match a different title that
+        # merely embeds it (a bare city name ⊄ a longer title containing it).
         if re.search(r"(?:^|\s)" + re.escape(short) + r"(?:\s|$)", lng):
             return True
     return difflib.SequenceMatcher(None, na, nb).ratio() >= HEADER_MATCH
@@ -1456,7 +1456,7 @@ def _merge_shared_title(books, splits=frozenset()):
 # unambiguous cases; the rest is left to a human-confirmed allow-list (in/merges.txt)
 # because title identity alone is unsafe — distinct books share generic titles
 # ("Singapore"), and real duplicates here often share NO resolved title at all
-# (a Gusinde plate-book titled "Kawësqar woman."). See IMPLEMENTATION_PLAN §14.
+# (a plate-book whose "title" is a specimen caption). See IMPLEMENTATION_PLAN §14.
 def _book_isbn(book) -> str:
     """Normalized ISBN digits from any of the book's metadata blocks, or ""."""
     for m in book["metadata"]:
@@ -1747,7 +1747,7 @@ def book_title(book) -> str:
         if c and not _is_nontitle(c):
             # a running title repeated on many shots that disagrees means this "cover"
             # is a stray/UI shot — trust the book's own running title instead. But a
-            # byline running header (e.g. the editors "Geoffrey Benjamin" printed as a
+            # byline running header (e.g. an edited volume's editors printed as a
             # verso header) is NOT a title and must never veto a real cover title (§16).
             if (topn >= COVER_OVERRIDE_VOTES and not _hdr_match(c, top)
                     and not _looks_like_byline(top)):
@@ -1851,12 +1851,12 @@ def _is_nontitle(t: str) -> bool:
 
 # A contained-but-much-shorter title is trustworthy once it is long enough to be
 # specific on its own: the OCR reads a cover's main title while Zotero carries the full
-# subtitle ("A HISTORY OF SINGAPORE" inside "Seven hundred years : a history of
-# Singapore" is only 52 % of its length, so the 0.7 ratio guard alone rejects it).
+# subtitle (a 22-char cover main title inside its 42-char full RIS title is only
+# 52 % of its length, so the 0.7 ratio guard alone rejects it).
 # Measured over the whole corpus 2026-07-31: 20 and 18 both recover exactly four books
-# (Kwa, King's China Sea Directory, the JIA, and "Mapping the Unmappable?") and break
-# none; **16 breaks one** — "the power of maps" (17 chars) is contained in "rethinking
-# the power of maps" and flips Wood's 1992 book onto the 2010 one. 20 keeps three
+# (four separately verified records) and break
+# none; **16 breaks one** — a 17-char main title is contained in a longer title that
+# extends it, flipping the 1992 book onto the 2010 one. 20 keeps three
 # characters of headroom over that measured false positive. Re-measure before lowering.
 _CONTAINMENT_MIN_CHARS = 20
 
@@ -1878,9 +1878,9 @@ def _is_citable(r) -> bool:
 
 def match_ris(book, ris):
     """Best RIS book whose title matches one of this book's title guesses. Compares
-    pre-colon *main* titles (so a shared subtitle suffix like '… in the Malay World'
+    pre-colon *main* titles (so a subtitle suffix shared by two books
     can't cause a false match) AND the *full* titles (so a real match survives OCR
-    dropping the subtitle colon — a run-on 'Across Oceans of Law The Komagata Maru …'
+    dropping the subtitle colon — a run-on '<main title> <subtitle> …'
     still matches its colon-bearing RIS entry). Returns the record or None (spec 026).
 
     Tries an exact ISBN match first: it's the one signal immune to a garbled cover

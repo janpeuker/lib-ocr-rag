@@ -19,7 +19,7 @@ text, so the per-book document carries a usable citation header without me typin
 2. **Given** dots.mocr prefixes every shot with a `### Page N` folio, **when** the cover
    title is resolved, **then** `_cover_title` skips the leading folio / call-no / ISBN noise
    and joins the first run of consecutive title-like lines, so a wrapped title
-   (`THE ECONOMIC HISTORY` / `OF SINGAPORE`) is captured whole — it is never named `Page 1`.
+   (an all-caps title wrapped across two lines) is captured whole — never named `Page 1`.
 3. **Given** a later short page misclassified COVER (e.g. a `PREFACE` page), **when**
    `book_title` resolves, **then** the **earliest** cover (capture order) wins, generic
    titles are skipped, and a running title repeated on ≥ `COVER_OVERRIDE_VOTES` shots can veto
@@ -28,8 +28,8 @@ text, so the per-book document carries a usable citation header without me typin
    self-correct from the cached `ocr_text` with **no re-OCR** (pure grouping/emit pass).
 
 ### Edge cases
-- `_hdr_match` containment requires word-boundary alignment, so `SINGAPORE` does not match
-  `Leluhur Singapore's Kampong Gelam`, while `Tribal Communities` still binds to its CIP form.
+- `_hdr_match` containment requires word-boundary alignment, so a one-word city name does not
+  match *Book-W*'s longer title, while *Book-I*'s first two words still bind to its CIP form.
 - A book whose title is buried in a title-page *list* (a series page) or lost to a runaway
   read, and absent from the bibliography, cannot be auto-titled — use feature 010's override.
 
@@ -69,17 +69,18 @@ text, so the per-book document carries a usable citation header without me typin
 - The **largest-font** refinement (§16) supersedes the reading-order `_cover_title` for shots
   classified COVER — split into feature 008 as its own story.
 - **`match_ris` now tries an exact ISBN match before fuzzy title matching (Jul 2026).**
-  Trocki's "Singapore: Wealth, Power and the Culture of Control" sat unmatched despite
-  its ISBN (0-415-26385-9) being both in the imprint OCR *and* the RIS `SN` field,
+  Author-K's *Book-K* sat unmatched despite
+  its ISBN (`<ISBN-1>`) being both in the imprint OCR *and* the RIS `SN` field,
   because `match_ris` only ever compared titles — and this book's cover OCR'd as
-  "Singapore us/strat eak to", nowhere near the 0.85 fuzzy threshold. `_book_isbn(book)`
+  a garbled fragment of its city-name main title, nowhere near the 0.85 fuzzy
+  threshold. `_book_isbn(book)`
   (already used for the spec-025 imprint-ISBN split rule) is now checked against every
   RIS record's normalized ISBN first; only falls through to fuzzy title matching if no
   ISBN is present on either side. More robust than a `titles.txt` override for this
   case: title overrides feed the *same* fuzzy matcher (as one more query candidate), so
   a plausible-sounding override can still collide with an unrelated book sharing a
   generic main title — exactly what happened when the first-draft override
-  `"Singapore: Wealth, Power..."` reduced to bare "Singapore" and false-matched Perry's
-  "Singapore: Unlikely Power" at 0.99. ISBN matching sidesteps both failure modes and
+  (*Book-K* truncated) reduced to its bare city-name first word and false-matched
+  Author-W's unrelated *Book-S* at 0.99. ISBN matching sidesteps both failure modes and
   fills in full author/publisher/year/city from Zotero, so prefer it — reach for
   `titles.txt` only when the book has no legible ISBN at all.

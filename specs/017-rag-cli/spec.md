@@ -22,7 +22,7 @@ works from any working directory and that re-embeds only what changed.
 3. **Given** a hit, **when** I run `rag.py get-page IMG_x [--neighbors N] [--json]`, **then** I
    get that page ± neighbours in full, without loading the book.
 4. **Given** any result, **when** I read `citation`, **then** it is paste-ready —
-   *"Andaya, Leaves of the Same Tree (2008), IMG_4894 p.3"*.
+   *"Author-N, Book-M (2008), IMG_4894 p.3"*.
 5. **Given** the tool is invoked from another project's directory, **when** any command runs,
    **then** `--src`/`--db`/`--probes` resolve against the install dir (`SCRIPT_DIR`), not the
    caller's cwd.
@@ -98,10 +98,10 @@ works from any working directory and that re-embeds only what changed.
   must call `citation(row)`, not `row['citation']`.)
 - **`--book` matched the filename only (fixed).** The scope ran `book_file LIKE '%S%'`, and a
   `book_file` is `book_86_making-anthropology-…md` — the author never appears in it. So
-  `--book ingold` returned **nothing** while `--book book_86` returned the same book's pages:
+  `--book <surname>` returned **nothing** while `--book book_86` returned the same book's pages:
   the one scoping operator only worked if you already knew the number you were trying to avoid
   looking up. Matching file + title + author, word-by-word, is what users actually mean by "in
-  the Ingold book". Deliberately loose (substring, not token or fuzzy-distance): a scope is a
+  the <surname> book". Deliberately loose (substring, not token or fuzzy-distance): a scope is a
   *filter you can inspect* — `books --book X` shows exactly what it covers — so over-matching
   costs a visible extra book, while under-matching silently returns nothing. Query-side
   operators (`author:X`, `+term`, `"phrase"`) were considered alongside and **rejected**: the
@@ -120,7 +120,7 @@ works from any working directory and that re-embeds only what changed.
   both when the scope matched no book *and* when it matched a book that had nothing to say —
   and it returned before the human path's "no book matches" line, so the Skill and MCP (the
   callers that always pass `--json`) could not tell the two apart. Symptom in the wild:
-  `search "pirate" --book "trocki"` read as "the library has nothing on pirates in Trocki"
+  `search "pirate" --book "<surname>"` read as "the library has nothing on pirates in that book"
   when the real cause was a scope that resolved to zero books. Signalled out-of-band —
   stderr + exit `2` — rather than by reshaping stdout: an object-on-miss (or a uniform
   `{"results": …}` envelope) would make every consumer branch on shape for a case that is

@@ -66,7 +66,7 @@ retrieval quality decays far enough for me to notice it by hand.
 - Checks must never block a long overnight batch.
 - **Coverage accounting cannot see a mis-attribution.** `UNEXPLAINED` asks whether a shot's
   text reached *a* book, not whether it reached the *right* one. A 73-shot foreign book
-  folded into another (spec 013's Mignolo case) leaves coverage at 100 % and every existing
+  folded into another (spec 013's Book-A case) leaves coverage at 100 % and every existing
   check green. FR-010/FR-011 exist because "accounted for" and "correct" are different
   questions, and only the first was being asked.
 
@@ -159,17 +159,17 @@ retrieval quality decays far enough for me to notice it by hand.
   diagnosed by hand this session; all three had been in the catalog for months with
   `coverage.json` at 0 `UNEXPLAINED` and `doctor` green. Every existing check answers a
   question about *plumbing* — did the text reach a chunk, is the vector fresh, is the
-  window truncated — and every one of the three bugs was about *attribution*: 17 Sopher
-  pages under Cortesão, 73 Tribal Communities pages under Mignolo, 16 Jumper pages with no
+  window truncated — and every one of the three bugs was about *attribution*: 17 *Book-E*
+  pages under Author-P, 73 *Book-I* pages under Book-A, 16 Author-AF pages with no
   author or year. That is a class the guards were structurally unable to see, and the
   cost is higher than a plumbing fault: a truncated window degrades a search result, a
   mis-attributed page produces a **confident, correctly-formatted, wrong citation**.
   FR-010/FR-011 are the cheapest checks that ask an attribution question, and the ad-hoc
-  version of FR-010 immediately found a fourth bug (Chou's cover IMG_5684 stranded in
-  Sopher) that no one had reported. That hit rate is the argument for shipping them.
+  version of FR-010 immediately found a fourth bug (Author-O's cover IMG_5684 stranded in
+  *Book-E*) that no one had reported. That hit rate is the argument for shipping them.
 - **Neither new check would have caught the bug that motivated them, and that is the point
   to keep in view.** Both lean on the RIS, so both inherit its coverage: FR-010 needs the
-  foreign book to have a `TI` record (Tribal Communities had only `T2` chapter entries),
+  foreign book to have a `TI` record (*Book-I* had only `T2` chapter entries),
   and FR-011 is *itself* the report that the record is missing. They compose — FR-011 lists
   the books whose Zotero records are absent, adding a record makes FR-010 able to see that
   book — but only if the user acts on FR-011's list. A check whose recall depends on the

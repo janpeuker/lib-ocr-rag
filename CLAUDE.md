@@ -43,7 +43,7 @@ and drops handwritten annotations.
   Name a shot that turns out to sit in a *different* book and the operator silently imports
   that entire book, and the damage is invisible: the result looks like one large,
   correctly-titled book, with coverage at 100 % and `doctor` green (a `+ IMG_4396` intended
-  to reach Mignolo folded in all 73 shots of *Tribal Communities in the Malay World* and went
+  to reach Author-A folded in all 73 shots of *Book-I* and went
   unnoticed for a month — spec 013 decision log). **Before writing a `+` line, verify which
   book each named shot is in today** — don't infer it from the shot-number range, which is
   exactly the assumption that fails. When the intent is "attach these specific shots", use
@@ -52,7 +52,7 @@ and drops handwritten annotations.
   is over-merged (found two real defects across 133 books; spec 029 FR-010).
   **Splitting an over-merge isn't done until the freed book is in Zotero** — without a record
   it fuzzy-matches whatever is nearest and you trade one wrong citation for another
-  (*The Natures of Maps* → Harley's *The New Nature of Maps* at 0.878), and a `titles.txt`
+  (*Book-P* → Author-J's near-identically titled *Book-J* at 0.878), and a `titles.txt`
   override can't rescue it. Prefer `! IMG_x` over `+=` when the shot you're moving *opened*
   the book: `+=` is applied after segmentation, so it leaves the book's `identity` naming the
   departed shot's book, which then wins a 0.99 `match_ris` tie on RIS file order (spec 013

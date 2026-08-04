@@ -74,7 +74,7 @@ back-to-back in one session.
   cache (`PROMPT_VERSION` unchanged). Result on 128 records: **5 books, correct boundaries**.
 - **Title by exclusion.** `infer_title_by_exclusion` names an untitled book from a shelf
   overview shot by reading each spine block, dropping blocks matching already-identified
-  siblings, and keeping the remainder (IMG_4310 → "Leaves of the Same Tree"). Anchored on the
+  siblings, and keeping the remainder (IMG_4310 → *Book-M*). Anchored on the
   slip's "User Group:" field; drops authors/publishers/addresses.
 - New helpers from the redesign: `page_header`, `_is_title_like`, `_hdr_match`, `call_number`,
   `_page_reset`, `_merge_shared_title`, `_fold_key_images`, `gps_radius`, `book_capture`,

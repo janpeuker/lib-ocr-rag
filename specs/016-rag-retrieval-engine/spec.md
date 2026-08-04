@@ -94,7 +94,7 @@ ANN index that this scale does not justify.
   buys nothing but a heavy dep and an extra moving part. SQLite gives one portable file,
   transactions (a killed index run leaves a consistent DB), built-in FTS5, and no service.
 - **Why hybrid + RRF.** The driver query has two halves with opposite needs: a paraphrased
-  concept (→ dense embeddings) and an approximate proper noun "James C. Scott" (the single worst
+  concept (→ dense embeddings) and an approximate author proper noun (the single worst
   case for dense — name embeddings collapse → a lexical channel). Author-enriched `embed_text`
   also lets the author match semantically even when the body never repeats it.
 - **Why bge-small (384-dim).** Small, fast, strong English retrieval (MTEB), runs on CPU/MPS,

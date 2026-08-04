@@ -8,7 +8,7 @@
 ### Primary user story
 As a user whose camera roll contains **name-twin files from two different sittings**
 (`IMG_5043 (1).jpeg` from a German dissertation shot in June alongside `IMG_5043.jpeg`
-from *Indonesian Sea Nomads* shot in May), I want shots grouped in the order they were
+from *Book-N* shot in May), I want shots grouped in the order they were
 **captured**, not the order their filenames happen to sort — because filename order
 alternates between the two sittings, every adjacent pair trips the 6-hour session-gap
 fence, and both books explode into one-page singleton "books" (287 of 427 books in the
@@ -71,9 +71,9 @@ delivering corpus were such singletons).
   documentation and as a regression guard.
 - **Known interaction, resolved by 024:** capture order removes the *spurious* session
   gaps that had accidentally been splitting a coverless book from a cover-anchored
-  predecessor in the same sitting (Chou after Tribal Communities) and had kept two
-  fuzzy-similar titles apart (Chou's "Indonesian Sea Nomads" vs Sopher's "THE SEA
-  NOMADS" clears the 0.6 header bar). Both need human boundaries: the `! IMG_x` split
+  predecessor in the same sitting (Book-N after Book-I) and had kept two
+  fuzzy-similar titles apart (Author-O's *Book-N* vs Author-C's *Book-E* — near-identical
+  titles that clear the 0.6 header bar). Both need human boundaries: the `! IMG_x` split
   hint and a `+=` shot-move respectively.
 - **Why carry-forward for missing EXIF** rather than sorting unknowns to one end: a
   screenshot or export sits between camera shots of the same sitting in filename order;

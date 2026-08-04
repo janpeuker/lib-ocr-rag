@@ -67,7 +67,7 @@ LAYOUT_PROMPT = (
 # The body OCR (PROMPT) emits a cover's text in spatial *reading* order, which
 # puts the publisher/author/imprint first as often as the title — so taking the
 # first title-like line (`_cover_title`) named books after their publisher
-# ("The Guilford Press") or author ("Geoffrey Benjamin"). A book title is the
+# ("The Guilford Press") or author ("Author-H"). A book title is the
 # *largest font* on the cover, not the first line, so we ask for layout WITH text
 # (unlike LAYOUT_PROMPT, which suppresses text) and pick the tallest `Title`
 # element's bbox. Used ONLY on COVER shots to set the title; its text never enters

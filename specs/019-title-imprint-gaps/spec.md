@@ -63,7 +63,7 @@ rather than the title landing in body text or the book being named after an auth
   "first published", "all rights reserved", "Library of Congress") already classify IMPRINT;
   cover-only pages (<280 chars) already COVER; IMG_2230 ("no cover, imprint only") is correctly
   IMPRINT with a full CIP block extracted. Only two genuine gaps remain.
-- **Gap A (IMG_3104).** A spread of "Also Available" (series list) + "WEAPONIZING MAPS"
+- **Gap A (IMG_3104).** A spread of "Also Available" (series list) + *Book-AI*
   (title/imprint) → `detect_type` sees two folio headers → SPREAD fires before the per-record
   IMPRINT check; the title lands in body text. Fix is a one-liner: per-page `IMPRINT_MARKERS`
   test before the SPREAD return, with a `< 1500 char` guard. **Delivered.**

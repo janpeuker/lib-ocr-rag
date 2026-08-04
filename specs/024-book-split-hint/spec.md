@@ -8,8 +8,8 @@
 ### Primary user story
 As a user who photographs several books back-to-back in one library sitting, I sometimes
 open a book that has **no usable cover shot** right after finishing a cover-anchored one
-(Chou's *Indonesian Sea Nomads*, pages-only, directly after the second reading of *Tribal
-Communities in the Malay World*). No session gap separates them and the anchored-book rule
+(Author-O's *Book-N*, pages-only, directly after the second reading of
+*Book-I*). No session gap separates them and the anchored-book rule
 correctly refuses to split on running headers — so the grouper cannot know a new book
 started. I want to state that boundary myself, in the same human-confirmed hint file that
 already records merges, so the split survives every re-run without touching the cache.
@@ -48,7 +48,7 @@ already records merges, so the split survives every re-run without touching the 
 - **Split stem** — a photo filename stem at which segmentation must start a new book.
 
 ## Review & Acceptance Checklist
-- [x] `! IMG_5035` separates Chou's coverless book from Tribal Communities
+- [x] `! IMG_5035` separates Author-O's coverless book from *Book-I*
 - [x] No `!` lines ⇒ output unchanged; unknown stems ignored
 - [x] Splits precede merges; cache untouched
 
@@ -64,7 +64,7 @@ already records merges, so the split survives every re-run without touching the 
   inverse of a merge and is maintained in the same workflow (inspect `report.md`, adjust,
   re-run). One file keeps the grouping story in one place.
 - **Folio-number guard against false COVER splits (Jul 2026).** Two real cases
-  (Sather's "The Bajau Laut" IMG_8133, Hatfield's "Pacific: An Ocean of Wonders"
+  (Author-D's *Book-F* IMG_8133, Author-Z's *Book-T*
   IMG_5642) got auto-split because `detect_type`'s sparse-text/colour heuristic
   classified a mid-book photo-plate caption and a part-title divider as COVER — each
   had almost no OCR'd text, exactly what a real cover looks like. Both, however, carried
@@ -73,12 +73,12 @@ already records merges, so the split survives every re-run without touching the 
   First cut checked `page_numbers(t)` (the general-purpose folio extractor used for
   citations), which over-fired: 205 already-correct COVER shots flipped, because that
   helper falls back to "any bare digit line ≤4 chars" when no `### Page N` heading is
-  present — it caught a publication year printed on a real cover (Sather's own cover
+  present — it caught a publication year printed on a real cover (Author-D's own cover
   misread "1997" as a folio) and other stray digits. Restricting to a literal
   `### Page N` heading cut that to 41, but a second trap remained: dots.mocr defaults a
   genuinely sparse cover/half-title shot to "Page 1" (sometimes "Page 1" + "Page 2" for
-  a cover+facing-page spread) even when nothing is printed — real covers for da Cunha,
-  Sutherland, Leifer, Connerton, and others all carry that phantom `### Page 1`. The
+  a cover+facing-page spread) even when nothing is printed — real covers for Author-AA,
+  Author-AB, Author-AC, Author-AD, and others all carry that phantom `### Page 1`. The
   final guard (`FOLIO_MIN = 4` in `detect_type`) only trusts a folio at or above that
   value; below it, "Page 1/2" is the model's default, not real pagination.
   `detect_type` now refuses to classify a shot with a real folio as COVER, so it falls
@@ -93,17 +93,17 @@ already records merges, so the split survives every re-run without touching the 
   lines for these two books were removed as redundant. merges.txt/titles.txt remain the
   catch-all for cases this can't foresee (e.g. a plate page with no printed folio at
   all, or one whose folio happens to be 1-3).
-- **The Trocki title override (titles.txt) was a misdiagnosis, not a real gap.** The
-  book's ISBN (0-415-26385-9) was in the Zotero RIS the whole time — a narrow `grep`
+- **The Book-K title override (titles.txt) was a misdiagnosis, not a real gap.** The
+  book's ISBN (`<ISBN-1>`) was in the Zotero RIS the whole time — a narrow `grep`
   context window during the original investigation missed the matching record. The
   actual bug: `match_ris` only ever compared titles, so a badly garbled OCR title
-  guess ("Singapore us/strat eak to") could never fuzzy-match the real RIS title, even
+  guess (a mangled fragment of the city-name main title) could never fuzzy-match the real RIS title, even
   with an exact ISBN sitting right there in the imprint text. Fixed by trying an exact
   ISBN match first (`_book_isbn(book)` against each RIS record's `SN` field) before
   falling back to fuzzy title comparison — ISBN is immune to both a garbled title guess
   *and* to the false-positive risk fuzzy matching carries for generic/shared main
-  titles (the titles.txt override's own first draft, `"Singapore: Wealth, Power..."`,
-  false-matched Perry's unrelated "Singapore: Unlikely Power" at 0.99 via the
+  titles (the titles.txt override's own first draft, *Book-K* truncated,
+  false-matched Author-W's unrelated *Book-S* at 0.99 via the
   main-title-before-colon comparison — a title override can collide with this same
   fuzzy path). With ISBN matching in place the book resolves automatically with full
   author/publisher/year/city from Zotero, so the titles.txt line was removed.

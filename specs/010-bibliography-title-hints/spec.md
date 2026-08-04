@@ -17,7 +17,7 @@ resort, force a specific title when even the bibliography can't supply it.
    author/publisher/year/ISBN/city in both `report.md` and the per-book YAML frontmatter.
 2. **Given** two books that share a subtitle suffix, **when** matching, **then** matching
    compares only the **main** title (pre-colon) at ≥ 0.85 ratio / containment, so a shared
-   subtitle cannot cause a false match (e.g. book 5 is NOT matched to a "Piracy and Politics"
+   subtitle cannot cause a false match (e.g. book 5 is NOT matched to a *Book-AL*
    decoy).
 3. **Given** a book whose title is buried in a series list or lost to a runaway read AND
    absent from the RIS, **when** I add `IMG_xxxx = Some Title` to `in/titles.txt`, **then**
@@ -27,7 +27,7 @@ resort, force a specific title when even the bibliography can't supply it.
 
 ### Edge cases
 - `match_ris` MUST skip `_GENERIC_TITLES` queries so a mis-titled `Preface` page does not match
-  a Foucault "Preface" RIS entry.
+  an unrelated "Preface" RIS entry.
 - A title override is a last resort — prefer fixing the read or the bibliography first.
 
 ## Requirements
@@ -46,8 +46,8 @@ resort, force a specific title when even the bibliography can't supply it.
   honour the no-op-if-absent contract (Principle VIII): absent ⇒ no-op; output-only; they MUST
   NEVER touch the cache, change grouping decisions, or affect `PROMPT_VERSION`.
 - **FR-005** An RIS record whose creators are editors (`A3`/`A2`/`ED` tags, no `AU`/`A1`)
-  MUST still fill the author field, credited as editor(s): `Orford, Anne (ed.)` /
-  `Darian-Smith, Eve; Fitzpatrick, Peter (eds.)`.
+  MUST still fill the author field, credited as editor(s): `Author-S (ed.)` /
+  `Author-T; Author-U (eds.)`.
 
 ### Key entities
 - **RIS record** — parsed bibliographic entry `{ title, author, publisher, year, isbn, city }`.
@@ -59,19 +59,19 @@ resort, force a specific title when even the bibliography can't supply it.
 - [x] All hints are output-only no-ops when absent; cache/grouping untouched
 
 ## Decision log (non-normative)
-- **RIS result (§9, sample of 5 books):** 3 of 5 title-corrected + enriched ("Leaves of the
-  **Same Tree** …", full "Enemy of All" and "Power and Politics" subtitles, authors, ISBNs);
+- **RIS result (§9, sample of 5 books):** 3 of 5 title-corrected + enriched (*Book-M*'s
+  truncated cover form completed, full *Book-AM* and *Book-Z* subtitles, authors, ISBNs);
   the 2 unmatched keep OCR metadata. Output-only — the cache, grouping, and `PROMPT_VERSION`
   never depend on the RIS.
 - **Why title overrides exist (§15/§16).** A residual class of books can't be auto-titled:
-  title buried in a series-page list (e.g. "Cosmopolitical Ecologies Across Asia", not in
-  `Studio.ris`), or a model that emits no `Title` box (spine-only/sideways/imprint shots). For
+  title buried in a series-page list (e.g. *Book-AC*, absent from the RIS export), or a model
+  that emits no `Title` box (spine-only/sideways/imprint shots). For
   those, `in/titles.txt` is the explicit last-resort override (e.g.
-  `IMG_5922 = Singapore: A Modern History`).
+  `IMG_5922 = <Book-V's title>`).
 - This story shares the exact no-op-if-absent contract with the feature 013 `merges.txt`
   duplicate-merge allow-list — three optional `in/` files, all output-only.
 - **Editor credit (FR-005, Jul 2026):** Zotero exports an edited volume's editors as `A3`
   (no `AU`), so `load_ris` previously dropped them and the book showed an empty author.
   Editors now fill the author field with an "(ed.)"/"(eds.)" suffix — factually right for
-  edited volumes (Orford's *International Law and its Others*, Darian-Smith & Fitzpatrick's
-  *Laws of the Postcolonial*) and reversible in Zotero, not here, if a record is miscast.
+  edited volumes (Author-S's *Book-Q*, Author-T & Author-U's
+  *Book-R*) and reversible in Zotero, not here, if a record is miscast.

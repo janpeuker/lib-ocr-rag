@@ -12,33 +12,33 @@ purely at emit time (re-runnable, no re-OCR, hints and cache untouched).
 1. **RIS match misses when OCR drops the subtitle colon.** `match_ris` compared only the
    pre-colon *main* title (feature 010 FR-002, to stop a shared subtitle causing a false
    match). But dots.mocr routinely reads a cover's title and subtitle as one run-on line
-   with no colon — `ACROSS OCEANS OF LAW The Komagata Maru and Jurisdiction in the Time of
-   Empire`. Its main title is then the whole run-on string, which no longer matches the
-   RIS record's short main title `Across Oceans of Law`, so a book that *is* in the
-   bibliography shows an empty author/year (observed: Sather *The Bajau Laut*, Mawani
-   *Across Oceans of Law*, Bhandar *Colonial Lives of Property* — all present as `BOOK`
+   with no colon — `<BOOK-H MAIN TITLE> <its long subtitle>` as one string. Its main title
+   is then the whole run-on string, which no longer matches the
+   RIS record's short main title *Book-H*, so a book that *is* in the
+   bibliography shows an empty author/year (observed: Author-D *Book-F*, Author-F
+   *Book-H*, Author-M *Book-L* — all present as `BOOK`
    records, all unmatched).
 
 2. **Library CIP boilerplate accepted as a title.** An imprint page prints "A catalogue
    record for this book is available from the British Library"; on a run of imprint-heavy
    shots this line becomes the plurality running header and is picked as the book's title
-   (observed: three distinct books all titled "A catalogue record …" — Weizman *Hollow
-   Land* ×2 and an Ingold volume).
+   (observed: three distinct books all titled "A catalogue record …" — Author-B's
+   *Book-D* ×2 and an Author-E volume).
 
 3. **A cover misread as a body page loops into a runaway.** dots.mocr stuck on a big cover
-   title emits it hundreds of times (`The Law of the Sea` × 683). Stored as body `raw_md`
-   it floods the RAG index with one repeated line (observed: Couper, book_06 / IMG_4667).
+   title emits it hundreds of times (*Book-AF*'s title × 683). Stored as body `raw_md`
+   it floods the RAG index with one repeated line (observed: Author-X, book_06 / IMG_4667).
 
 ## User Scenarios & Testing
 
 ### Acceptance scenarios
 1. **Given** a book whose OCR title is a colon-less run-on of a title+subtitle that a RIS
    `BOOK` record spells with a colon, **when** `batch` runs, **then** `match_ris` matches
-   it (via full-title comparison) and fills author/year — e.g. *Across Oceans of Law* →
-   Mawani, 2018.
+   it (via full-title comparison) and fills author/year — e.g. *Book-H* →
+   Author-F, 2018.
 2. **Given** two *different* books that share only a subtitle suffix, **when** matching,
    **then** neither the main-title nor the full-title path matches them (the feature 010
-   "Piracy and Politics" decoy still does not match "Power and Politics").
+   *Book-AL* decoy still does not match *Book-Z*).
 3. **Given** a book whose only title signal is the British-Library CIP boilerplate,
    **when** deriving its title, **then** that line is rejected and the book falls back to
    its next title signal (or an override / Untitled placeholder), never showing the
@@ -54,7 +54,7 @@ purely at emit time (re-runnable, no re-OCR, hints and cache untouched).
   ratio) so a legitimate list/table/index is never blanked.
 - A cover misclassified as a body page loses its body-derived title when healed; its real
   title must then come from `cover_title`, a running header, or a `titles.txt` override
-  (IMG_4667 → `The Law of the Sea` via override).
+  (IMG_4667 → *Book-AF* via override).
 
 ## Requirements
 
@@ -93,7 +93,7 @@ purely at emit time (re-runnable, no re-OCR, hints and cache untouched).
 - [x] Colon-dropped run-on titles match their RIS `BOOK` record; subtitle-only decoy still unmatched
 - [x] British-Library CIP boilerplate never shown as a title
 - [x] Runaway body blanked at emit; cache/grouping/PROMPT_VERSION untouched
-- [x] Sather / Mawani / Bhandar fill author/year with no per-book override
+- [x] Author-D / Author-F / Author-M fill author/year with no per-book override
 
 ## Decision log (non-normative)
 
@@ -108,23 +108,23 @@ shorter:
 
 | OCR title | RIS record | contained | 0.7 guard | difflib |
 |---|---|---|---|---|
-| `A HISTORY OF SINGAPORE` (22) | *Seven hundred years : a history of Singapore* (42) | yes | **fails** (0.52) | 0.688 |
-| `The China Sea Directory Vol. I` (29) | *The China Sea Directory, vol. I. Containing…* (104) | yes | **fails** (0.28) | 0.436 |
+| *Book-X* short cover form (22 chars) | *Book-X* full RIS title (42) | yes | **fails** (0.52) | 0.688 |
+| *Book-AE* short cover form (29 chars) | *Book-AE* full RIS title (104) | yes | **fails** (0.28) | 0.436 |
 
 These were the two largest unattributed books in the corpus, 169 pp. FR-005 adds an absolute
 -length escape. **The constant is not a guess** — sweeping candidate values over all books:
 
 | `_CONTAINMENT_MIN_CHARS` | books changed | verdict |
 |---|---|---|
-| 16 | 5 | **breaks one**: `the power of maps` (17 ch) is contained in *Rethinking the Power of Maps*, flipping Wood's 1992 book onto the 2010 one |
-| **18 / 20** | **4** | all correct: Kwa, King's *China Sea Directory*, the JIA, and *Mapping the Unmappable?* |
+| 16 | 5 | **breaks one**: a 17-char main title is contained in a longer title extending it, flipping Author-Q's 1992 book onto the 2010 one |
+| **18 / 20** | **4** | all correct (four separately verified records) |
 
 18 and 20 are indistinguishable in effect, so **20** ships — three characters of headroom over
 the measured false positive rather than one.
 
 **2. Serials were structurally unmatchable.** The filter admitted only `BOOK`/`CHAP`/`EDBOOK`,
-so a photographed journal run could never match however the user catalogued it — the *Journal
-of the Indian Archipelago* record (Earl & Logan, Mission Press, 1847) is `TY - JOUR` and was
+so a photographed journal run could never match however the user catalogued it — the
+*Book-U* record (Author-AH & Author-AI, 1847) is `TY - JOUR` and was
 skipped before comparison. Simply admitting `JOUR` is unsafe: this library holds 105 article
 records, and a cover title fuzzy-matching an article would credit a whole book to one paper's
 author — the confident-wrong-citation failure spec 029 exists to prevent. FR-006's test is
@@ -140,7 +140,7 @@ positive, which no amount of reasoning about the constant would have surfaced.
   weaken it, we ADD a full-title comparison and take the max: a full match requires the
   *whole* title (incl. subtitle) to agree, which two different books sharing only a
   subtitle can't do — so scenario 2 is preserved while the colon-dropped real matches are
-  recovered. Verified: Mawani/Sather/Bhandar match; "Power and Politics" stays `None`.
+  recovered. Verified: Author-F/Author-D/Author-M match; *Book-Z* stays `None`.
 - **Boilerplate as a regex, not a `_GENERIC_TITLES` entry.** The CIP line is long and
   varies ("British Library" / "Library of Congress"), so it's matched by
   `_BOILERPLATE_TITLE` rather than the exact-string generic set, and folded into a shared

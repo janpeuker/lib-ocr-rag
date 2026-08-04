@@ -1,6 +1,6 @@
 # Feature 025 — Imprint-ISBN book boundary
 
-**Status:** Delivered · **Origin:** a title-less imprint gluing four books into "EAST INDIA PILOT" (IMG_8552–8677)
+**Status:** Delivered · **Origin:** a title-less imprint gluing four books into *Book-Y* (IMG_8552–8677)
 **Constitution:** III, V, VIII
 
 ## User Scenarios & Testing
@@ -11,13 +11,13 @@ book on its **copyright page** (no cover shot, or the cover misreads as a body p
 The imprint parses a year and an ISBN but **no title** — and the existing boundary rule
 ("a cover/imprint with a *new* title starts a book") never fires without a title. The
 whole next book then chains onto its predecessor, and worse, the foreign imprint's
-year/ISBN **pollute the wrong book's metadata** (Elden's 2013 Chicago ISBN landed on the
-antique "EAST INDIA PILOT"; Mawani's Duke ISBN on a Yeoh fragment). An ISBN is a
+year/ISBN **pollute the wrong book's metadata** (Author-L's 2013 ISBN landed on the
+antique *Book-Y*; Author-F's ISBN on an Author-AJ fragment). An ISBN is a
 stronger identity signal than a title — it should be a boundary on its own.
 
 ### Acceptance scenarios
 1. **Given** a body-bearing book followed by an IMPRINT shot whose parsed ISBN is not
-   one this book has already shown (IMG_8611: `978-0-226-20256-3` after the pilot spine),
+   one this book has already shown (IMG_8611: `<ISBN-2>` after the pilot spine),
    **when** `batch` groups shots, **then** a new book starts at that imprint.
 2. **Given** a book whose own imprint repeats an ISBN already collected from its cover
    or an earlier meta shot, **when** grouping runs, **then** no split occurs (same ISBN
@@ -55,7 +55,7 @@ stronger identity signal than a title — it should be a boundary on its own.
   parsed metadata block.
 
 ## Review & Acceptance Checklist
-- [x] IMG_8611 (Elden) and IMG_8677 (Mawani) start their own books with no title parsed
+- [x] IMG_8611 (Author-L) and IMG_8677 (Author-F) start their own books with no title parsed
 - [x] Cover→imprint→pages flow unchanged; ISBN-less imprints inert
 - [x] Pure over cached records; hints still override
 
@@ -71,6 +71,6 @@ stronger identity signal than a title — it should be a boundary on its own.
   modern US copyright page ("Cataloging-in-Publication", no 'u') misses the CIP regex
   and often parses year+ISBN but no title — exactly the delivering corpus's failure.
 - **What stays a hint.** The same sitting also had a cover OCR'd as a body page
-  (IMG_8637) and a spine-stack shot OCR'd as an Elden body page (IMG_8610) — OCR-level
+  (IMG_8637) and a spine-stack shot OCR'd as an Author-L body page (IMG_8610) — OCR-level
   misreads with no reliable signal; they stay in `merges.txt`/`titles.txt` per the
   spec-024 rationale.

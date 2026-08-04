@@ -816,9 +816,9 @@ def scope_books(con, book):
 
     Matched loosely on purpose — you scope by what you remember, not by the catalog's
     filename. Each whitespace-separated word must appear *somewhere* in the book's
-    file name, title or author (LIKE is case-insensitive for ASCII), so `ingold`,
-    `tim ingold` and `making anthropology` all reach
-    `book_86_making-… / Making: Anthropology… / Ingold, Tim`, which the old
+    file name, title or author (LIKE is case-insensitive for ASCII), so a surname,
+    `<forename> <surname>` and two words of the title all reach the same
+    `book_86_… / <title> / <author>` record, which the old
     book_file-only match reached by its book number alone.
     """
     words = book.split()

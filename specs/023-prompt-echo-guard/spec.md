@@ -10,7 +10,7 @@ As a user whose corpus contains **near-textless shots** (a leather book spine, a
 verso, a slip page), I do not want the VLM's failure mode — parroting its own instruction
 prompt back as the transcription — to enter a book as page text, because that junk then
 pollutes the emitted `book_*.md` and surfaces as absurd RAG hits ("DROP all handwriting:
-underlines, circles…" is not a page of Horsburgh 1811).
+underlines, circles…" is not a page of an 1811 sailing directory).
 
 ### Acceptance scenarios
 1. **Given** a shot whose read contains a verbatim line of the instruction prompt,
@@ -52,7 +52,7 @@ underlines, circles…" is not a page of Horsburgh 1811).
 - **Echo marker** — a line of `PROMPT` ≥ 40 chars; presence verbatim in a read defines echo.
 
 ## Review & Acceptance Checklist
-- [x] Spine shot (`IMG_5448`) contributes no text to Horsburgh's book
+- [x] Spine shot (`IMG_5448`) contributes no text to Author-Y's book
 - [x] All legacy poisoned caches healed at emit without cache writes
 - [x] Topical mentions of handwriting are not flagged
 - [x] Markers derived from `prompts.PROMPT`, not copies

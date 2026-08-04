@@ -15,11 +15,11 @@ first line in reading order — so the tool should pick the title by font size.
 1. **Given** a COVER shot, **when** it is processed, **then** one extra layout pass
    (`COVER_TITLE_PROMPT`, layout **with** text) is run, and `_pick_cover_title` takes the
    tallest `Title` bbox (height = font-size proxy) as the title.
-2. **Given** a wrapped title set in one size (`Tribal Communities` / `in the Malay World`),
+2. **Given** a wrapped title set in one size (*Book-I* broken across two lines),
    **when** picked, **then** boxes within `_COVER_TITLE_FONT_RATIO` (0.55) of the tallest are
    joined into the whole title, and a front-cover/spine repeat is de-duped.
-3. **Given** a title with a subtitle set smaller (`Singapore` + `Wealth, Power and the Culture
-   of Control`), **when** picked, **then** a *hugging* subtitle (top within
+3. **Given** a title with a subtitle set smaller (*Book-K*: a one-word city name over a
+   long subtitle), **when** picked, **then** a *hugging* subtitle (top within
    `_COVER_SUBTITLE_GAP_RATIO` of its own height below the title) is absorbed, while an author
    byline set farther down (`_looks_like_byline`) is not.
 4. **Given** a cover with no `Title` box at all, **when** picked, **then** `cover_title` is
@@ -72,11 +72,11 @@ first line in reading order — so the tool should pick the title by font size.
 
   | Book | Shot | OCR'd as (reading order) | Largest type (true title) |
   |------|------|--------------------------|---------------------------|
-  | 27 | IMG_3036 | The Guilford Press, New York London | Rethinking the Power of Maps |
-  | 32 | IMG_4358 | Geoffrey Benjamin | Tribal Communities in the Malay World |
-  | 38 | IMG_4798 | British Library | Secret Maps |
-  | 43 | IMG_5026 | Geoffrey Benjamin & Cynthia Chou | Tribal Communities in the Malay World |
-  | 59 | IMG_5922 | Bloomsbury | Singapore: A Modern History |
+  | 27 | IMG_3036 | The Guilford Press, New York London | *Book-AA* |
+  | 32 | IMG_4358 | Author-H | *Book-I* |
+  | 38 | IMG_4798 | British Library | *Book-AB* |
+  | 43 | IMG_5026 | Author-H & Author-O | *Book-I* |
+  | 59 | IMG_5922 | Bloomsbury | *Book-V* |
 
 - ~one extra layout pass per COVER (~150 in the batch), ~50 s/cover at 1600 px. Resolution is
   not negotiable — 1024 px is faster but silently misses small-on-cover titles.

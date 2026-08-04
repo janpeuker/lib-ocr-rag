@@ -227,7 +227,7 @@ embedding cache key — re-indexing only re-embeds new or *changed* pages.
 ### 3.5 Search: hybrid dense + lexical, fused with RRF
 
 ```
-   query "where does Scott discuss legibility at sea"
+   query "where does Author-AG discuss legibility at sea"
         │
         ├───────────────► DENSE channel
         │                   embed_query() ─► NumpyBackend.query()
