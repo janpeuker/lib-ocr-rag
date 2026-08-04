@@ -87,6 +87,13 @@ and drops handwritten annotations.
   fold map is written to `out/dedup.json` and shown in `index.md`; dedup touches no cache. Not a
   hint file — there's nothing to maintain. Distinct from the `merges.txt` book-merge (§13),
   which folds *different photos of the same book*.
+- **The `[i/n]` batch counter is not progress.** It indexes the whole deduped input list
+  and logs cache hits too (`→ TYPE (cached)`), so `n - i` is *not* remaining work — reading
+  it that way turns a 15-minute tail into a phantom 13-hour ETA. To estimate time left,
+  count the files whose `out/cache/<stem>.json` is missing or whose `model`/`prompt_version`
+  don't match the current run (the `load_cache` test); that is usually a tiny fraction, and
+  it clusters at the *end* of the sort order because new shots carry the highest `IMG_`
+  numbers — which is exactly what makes a resumed run look like it is OCR'ing everything.
 - **Cover/imprint shots can carry real page text** (spec 027). A COVER/IMPRINT shot is
   `role: meta` and read for bibliographic fields, but a title-page verso or imprint page
   often holds prose too. `write_book` emits it as a normal page section when it clears
